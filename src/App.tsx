@@ -17,6 +17,7 @@ import { PlanPage } from './pages/PlanPage';
 import { TeamPage } from './pages/TeamPage';
 import { WithdrawPage } from './pages/WithdrawPage';
 import { PlatformProvider, usePlatform } from './store/alphaStore';
+import { initEmailJs } from './utils/notifications';
 
 function parseHash() {
   const raw = window.location.hash.slice(1) || '/';
@@ -124,6 +125,10 @@ function AppRouter() {
 }
 
 export default function App() {
+  useEffect(() => {
+    initEmailJs();
+  }, []);
+
   return (
     <PlatformProvider>
       <ToastContainer />

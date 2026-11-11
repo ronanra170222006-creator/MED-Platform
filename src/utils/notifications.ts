@@ -3,27 +3,24 @@ import { formatAR } from './format';
 declare global {
   interface Window {
     emailjs?: {
-      init: (options: { publicKey: string }) => void;
+      init: (options: string | { publicKey: string }) => void;
       send: (
         serviceId: string,
         templateId: string,
         templateParams: Record<string, string | number>,
-        options?: { publicKey: string }
+        options?: string | { publicKey: string }
       ) => Promise<{ status: number; text: string }>;
     };
   }
 }
 
-const EMAILJS_SERVICE_ID =
-  import.meta.env.VITE_EMAILJS_SERVICE_ID || 'service_med_notify';
-const EMAILJS_TEMPLATE_ID =
-  import.meta.env.VITE_EMAILJS_TEMPLATE_ID || 'template_med_tx';
-const EMAILJS_PUBLIC_KEY =
-  import.meta.env.VITE_EMAILJS_PUBLIC_KEY || 'med_public_key';
+const EMAILJS_SERVICE_ID = 'service_15g3d46';
+const EMAILJS_TEMPLATE_ID = 'template_gma1yzs';
+const EMAILJS_PUBLIC_KEY = '81UWFjnQLVTiZ_dXk';
 
 let emailJsInitialized = false;
 
-function ensureEmailJsInit() {
+export function initEmailJs(): void {
   if (emailJsInitialized || typeof window === 'undefined' || !window.emailjs) {
     return;
   }
@@ -45,7 +42,7 @@ export function sendTransactionEmailSilently(params: {
 }): void {
   if (typeof window === 'undefined' || !window.emailjs) return;
 
-  ensureEmailJsInit();
+  initEmailJs();
 
   const payload: Record<string, string | number> = {
     telephone: params.telephone,
