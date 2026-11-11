@@ -27,7 +27,9 @@ export function MemberPage({ navigate }: { navigate: (path: string) => void }) {
 
   const availableBalance = (profile?.balance ?? 0) - (profile?.reserved_balance ?? 0);
   const userInvestments = investments.filter((i) => i.user_id === profile?.user_id);
-  const userTransactions = transactions.filter((t) => t.user_id === profile?.user_id);
+  const userTransactions = transactions.filter(
+    (t) => (t.user_id || t.userId) === profile?.user_id
+  );
 
   const copyCode = () => {
     if (!profile?.referral_code) return;
@@ -188,29 +190,36 @@ export function MemberPage({ navigate }: { navigate: (path: string) => void }) {
                 <p className="text-sm text-gray-400">Aucune transaction enregistrée</p>
               </div>
             ) : (
-              userTransactions.map((tx) => (
-                <div
-                  key={tx.id}
-                  className="card p-4 flex items-center justify-between"
-                >
-                  <div className="min-w-0 pr-3">
-                    <p className="text-sm font-semibold text-gray-900 truncate">
-                      {tx.description}
-                    </p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">
-                      {formatDateTime(tx.created_at)}
-                    </p>
-                  </div>
-                  <span
-                    className={`text-sm font-extrabold tabular-nums whitespace-nowrap ${
-                      tx.amount >= 0 ? 'text-med-deep' : 'text-gray-900'
-                    }`}
+              userTransactions.map((tx) => {
+                const txAmount =
+                  tx.amount ?? (tx.type === 'RETRAIT' ? -tx.montant : tx.montant);
+                const txDate = tx.created_at || tx.date;
+                const txDesc =
+                  tx.description || `${tx.type} ${tx.operateur ?? ''}`.trim();
+                return (
+                  <div
+                    key={tx.id}
+                    className="card p-4 flex items-center justify-between"
                   >
-                    {tx.amount >= 0 ? '+' : ''}
-                    {formatAR(tx.amount)}
-                  </span>
-                </div>
-              ))
+                    <div className="min-w-0 pr-3">
+                      <p className="text-sm font-semibold text-gray-900 truncate">
+                        {txDesc}
+                      </p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        {formatDateTime(txDate)}
+                      </p>
+                    </div>
+                    <span
+                      className={`text-sm font-extrabold tabular-nums whitespace-nowrap ${
+                        txAmount >= 0 ? 'text-med-deep' : 'text-gray-900'
+                      }`}
+                    >
+                      {txAmount >= 0 ? '+' : ''}
+                      {formatAR(txAmount)}
+                    </span>
+                  </div>
+                );
+              })
             )}
           </div>
         )}

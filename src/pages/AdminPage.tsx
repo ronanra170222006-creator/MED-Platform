@@ -1,5 +1,5 @@
-import React from 'react';
-import { ArrowLeft, Check, Shield, Users, X } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { ArrowLeft, Check, RefreshCw, Shield, Users, X } from 'lucide-react';
 import { StatusBadge } from '../components/Brand';
 import { showToast } from '../components/Toast';
 import { usePlatform } from '../store/alphaStore';
@@ -14,8 +14,18 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
     rejectDeposit,
     approveWithdrawal,
     rejectWithdrawal,
+    reloadFromStorage,
     logout,
   } = usePlatform();
+
+  useEffect(() => {
+    reloadFromStorage();
+  }, [reloadFromStorage]);
+
+  const handleRefresh = () => {
+    reloadFromStorage();
+    showToast('Données actualisées depuis le stockage local', 'success');
+  };
 
   const pendingDeposits = deposits.filter((d) => d.status === 'pending');
   const pendingWithdrawals = withdrawals.filter((w) => w.status === 'pending');
@@ -33,13 +43,22 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
             <Shield className="w-5 h-5 text-med-light" />
             <h1 className="font-bold text-base">Administration MED</h1>
           </div>
-          <button
-            onClick={exitAdmin}
-            className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Déconnexion</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleRefresh}
+              className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Actualiser</span>
+            </button>
+            <button
+              onClick={exitAdmin}
+              className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Déconnexion</span>
+            </button>
+          </div>
         </div>
       </header>
 

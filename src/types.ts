@@ -88,11 +88,30 @@ export interface WithdrawalRequest {
 
 export interface TransactionRecord {
   id: string;
-  user_id: string;
-  type: 'deposit' | 'withdrawal' | 'investment' | 'task_reward' | 'referral_bonus' | 'welcome_bonus';
-  amount: number;
-  description: string;
-  created_at: string;
+  userId: string;
+  user_id?: string;
+  user_name?: string;
+  telephone?: string;
+  type:
+    | 'DEPOT'
+    | 'RETRAIT'
+    | 'deposit'
+    | 'withdrawal'
+    | 'investment'
+    | 'task_reward'
+    | 'referral_bonus'
+    | 'welcome_bonus';
+  operateur?: string;
+  montant: number;
+  amount?: number;
+  frais?: number;
+  montant_net?: number;
+  reference?: string;
+  beneficiary_name?: string;
+  statut?: 'EN_ATTENTE' | 'REUSSI' | 'REFUSE';
+  description?: string;
+  date: string;
+  created_at?: string;
 }
 
 export interface NotificationItem {

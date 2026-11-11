@@ -5,6 +5,7 @@ import {
   Investment,
   NotificationItem,
   ReferralMember,
+  RequestStatus,
   TransactionRecord,
   UserProfile,
   WithdrawalRequest,
@@ -13,7 +14,7 @@ import { VIP_PLANS } from '../data/seed';
 import { formatAR } from '../utils/format';
 
 interface StoredAccount {
-  profile: UserProfile;
+  profile: UserProfile & { solde_ariary?: number };
   password: string;
 }
 
@@ -49,6 +50,7 @@ interface PlatformContextValue extends PlatformState {
   }) => Promise<ActionResult>;
   loginAdmin: (email: string, password: string) => Promise<ActionResult>;
   logout: () => Promise<void>;
+  reloadFromStorage: () => void;
   submitDeposit: (payload: {
     amount: number;
     payment_method: string;
@@ -72,7 +74,7 @@ interface PlatformContextValue extends PlatformState {
   rejectWithdrawal: (id: string) => Promise<void>;
 }
 
-const STORAGE_KEY = 'med_local_data_v1';
+export const STORAGE_KEY = 'med_local_data_v1';
 const ROOT_ADMIN_EMAIL = 'ronanswerdna@gmail.com';
 const ROOT_ADMIN_PASS = 'Ronan17#';
 
@@ -92,53 +94,134 @@ const initialCleanState: PlatformState = {
   referrals: [],
 };
 
+function mapStatutToStatus(statut?: string): RequestStatus {
+  if (statut === 'REUSSI') return 'approved';
+  if (statut === 'REFUSE') return 'rejected';
+  return 'pending';
+}
+
+function normalizeStoredProfile(raw: any): UserProfile {
+  const solde = Number(raw?.solde_ariary ?? raw?.balance ?? 0);
+  return {
+    ...raw,
+    balance: solde,
+  };
+}
+
+function deriveDepositsFromTransactions(transactions: TransactionRecord[]): DepositRequest[] {
+  return transactions
+    .filter((tx) => tx.type === 'DEPOT')
+    .map((tx) => ({
+      id: tx.id,
+      user_id: tx.userId,
+      user_name: tx.user_name || tx.telephone || 'Membre MED',
+      amount: Number(tx.montant ?? 0),
+      payment_method: tx.operateur || 'Airtel Money',
+      payment_operator: tx.operateur || 'Airtel Money',
+      payer_number: tx.telephone || '',
+      transaction_ref: tx.reference,
+      status: mapStatutToStatus(tx.statut),
+      created_at: tx.date,
+    }));
+}
+
+function deriveWithdrawalsFromTransactions(transactions: TransactionRecord[]): WithdrawalRequest[] {
+  return transactions
+    .filter((tx) => tx.type === 'RETRAIT')
+    .map((tx) => ({
+      id: tx.id,
+      user_id: tx.userId,
+      user_name: tx.user_name || tx.telephone || 'Membre MED',
+      amount: Number(tx.montant ?? 0),
+      fee: Number(tx.frais ?? 0),
+      net_amount: Number(tx.montant_net ?? tx.montant ?? 0),
+      payment_method: tx.operateur || 'Airtel Money',
+      beneficiary_number: tx.telephone || '',
+      beneficiary_name: tx.beneficiary_name || tx.user_name || 'Membre MED',
+      status: mapStatutToStatus(tx.statut),
+      created_at: tx.date,
+    }));
+}
+
+function readLocalState(): PlatformState {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<PlatformState>;
+      const accounts = (parsed.accounts ?? []).map((a) => ({
+        ...a,
+        profile: normalizeStoredProfile(a.profile),
+      }));
+      const transactions = (parsed.transactions ?? []) as TransactionRecord[];
+      const currentProfile = parsed.profile
+        ? accounts.find((a) => a.profile.user_id === parsed.profile?.user_id)?.profile ??
+          normalizeStoredProfile(parsed.profile)
+        : null;
+
+      return {
+        ...initialCleanState,
+        ...parsed,
+        loading: false,
+        profile: currentProfile,
+        accounts,
+        allUsers: accounts.map((a) => a.profile),
+        transactions,
+        deposits: deriveDepositsFromTransactions(transactions),
+        withdrawals: deriveWithdrawalsFromTransactions(transactions),
+      };
+    }
+  } catch {
+    // ignore storage read error
+  }
+  return initialCleanState;
+}
+
 const PlatformContext = createContext<PlatformContextValue | null>(null);
 
 export function PlatformProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<PlatformState>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<PlatformState>;
-        const accounts = parsed.accounts ?? [];
-        const currentProfile = parsed.profile
-          ? accounts.find((a) => a.profile.user_id === parsed.profile?.user_id)?.profile ??
-            parsed.profile
-          : null;
-        return {
-          ...initialCleanState,
-          ...parsed,
-          loading: false,
-          profile: currentProfile,
-          allUsers: accounts.map((a) => a.profile),
-        };
-      }
-    } catch {
-      // ignore storage read error
-    }
-    return initialCleanState;
-  });
+  const [state, setState] = useState<PlatformState>(() => readLocalState());
 
-  useEffect(() => {
+  const persistToStorage = useCallback((next: PlatformState) => {
     try {
+      const accountsWithSolde = next.accounts.map((acc) => ({
+        ...acc,
+        profile: {
+          ...acc.profile,
+          solde_ariary: acc.profile.balance,
+        },
+      }));
       const toPersist = {
-        isAuthenticated: state.isAuthenticated,
-        isAdminMode: state.isAdminMode,
-        profile: state.profile,
-        accounts: state.accounts,
-        investments: state.investments,
-        tasks: state.tasks,
-        deposits: state.deposits,
-        withdrawals: state.withdrawals,
-        transactions: state.transactions,
-        notifications: state.notifications,
-        referrals: state.referrals,
+        isAuthenticated: next.isAuthenticated,
+        isAdminMode: next.isAdminMode,
+        profile: next.profile
+          ? { ...next.profile, solde_ariary: next.profile.balance }
+          : null,
+        accounts: accountsWithSolde,
+        investments: next.investments,
+        tasks: next.tasks,
+        transactions: next.transactions,
+        notifications: next.notifications,
+        referrals: next.referrals,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(toPersist));
     } catch {
       // ignore storage write error
     }
-  }, [state]);
+  }, []);
+
+  useEffect(() => {
+    persistToStorage(state);
+  }, [state, persistToStorage]);
+
+  const reloadFromStorage = useCallback(() => {
+    const fresh = readLocalState();
+    setState((prev) => ({
+      ...fresh,
+      isAuthenticated: prev.isAuthenticated || fresh.isAuthenticated,
+      isAdminMode: prev.isAdminMode || fresh.isAdminMode,
+      profile: prev.isAdminMode ? prev.profile : fresh.profile,
+    }));
+  }, []);
 
   const syncAccountProfile = useCallback(
     (
@@ -146,9 +229,17 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       userId: string,
       updater: (p: UserProfile) => UserProfile
     ): { accounts: StoredAccount[]; allUsers: UserProfile[]; profile: UserProfile | null } => {
-      const nextAccounts = prev.accounts.map((acc) =>
-        acc.profile.user_id === userId ? { ...acc, profile: updater(acc.profile) } : acc
-      );
+      const nextAccounts = prev.accounts.map((acc) => {
+        if (acc.profile.user_id !== userId) return acc;
+        const updated = updater(acc.profile);
+        return {
+          ...acc,
+          profile: {
+            ...updated,
+            solde_ariary: updated.balance,
+          },
+        };
+      });
       const nextProfile =
         prev.profile && prev.profile.user_id === userId
           ? updater(prev.profile)
@@ -168,18 +259,19 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, error: 'Numéro de téléphone invalide' };
     }
 
-    const found = state.accounts.find((a) => a.profile.phone === cleanPhone);
+    const latest = readLocalState();
+    const found = latest.accounts.find((a) => a.profile.phone === cleanPhone);
     if (!found || found.password !== password) {
       return { ok: false, error: 'Numéro de téléphone ou mot de passe incorrect' };
     }
 
-    setState((prev) => ({
-      ...prev,
+    setState({
+      ...latest,
       isAuthenticated: true,
       isAdminMode: false,
       profile: found.profile,
-      allUsers: prev.accounts.map((a) => a.profile),
-    }));
+      allUsers: latest.accounts.map((a) => a.profile),
+    });
 
     return { ok: true };
   };
@@ -202,7 +294,9 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     if (password.length < 6) {
       return { ok: false, error: 'Le mot de passe doit contenir au moins 6 caractères' };
     }
-    if (state.accounts.some((a) => a.profile.phone === cleanPhone)) {
+
+    const latest = readLocalState();
+    if (latest.accounts.some((a) => a.profile.phone === cleanPhone)) {
       return { ok: false, error: 'Ce numéro de téléphone est déjà utilisé' };
     }
 
@@ -210,13 +304,14 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     const userId = 'user-' + Date.now();
     const now = new Date().toISOString();
 
-    const newProfile: UserProfile = {
+    const newProfile: UserProfile & { solde_ariary: number } = {
       user_id: userId,
       full_name: full_name.trim(),
       phone: cleanPhone,
       referral_code: generatedCode,
       referred_by: referral_code?.trim() || undefined,
       balance: 0,
+      solde_ariary: 0,
       reserved_balance: 0,
       total_earned: 0,
       is_admin: false,
@@ -224,16 +319,14 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       created_at: now,
     };
 
-    setState((prev) => {
-      const nextAccounts = [...prev.accounts, { profile: newProfile, password }];
-      return {
-        ...prev,
-        isAuthenticated: true,
-        isAdminMode: false,
-        profile: newProfile,
-        accounts: nextAccounts,
-        allUsers: nextAccounts.map((a) => a.profile),
-      };
+    const nextAccounts = [...latest.accounts, { profile: newProfile, password }];
+    setState({
+      ...latest,
+      isAuthenticated: true,
+      isAdminMode: false,
+      profile: newProfile,
+      accounts: nextAccounts,
+      allUsers: nextAccounts.map((a) => a.profile),
     });
 
     return { ok: true };
@@ -245,11 +338,12 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, error: 'Identifiants administrateur invalides' };
     }
 
-    setState((prev) => ({
-      ...prev,
+    const latest = readLocalState();
+    setState({
+      ...latest,
       isAuthenticated: true,
       isAdminMode: true,
-      allUsers: prev.accounts.map((a) => a.profile),
+      allUsers: latest.accounts.map((a) => a.profile),
       profile: {
         user_id: 'root-admin',
         full_name: 'Administrateur MED',
@@ -263,7 +357,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         is_suspended: false,
         created_at: new Date().toISOString(),
       },
-    }));
+    });
 
     return { ok: true };
   };
@@ -291,17 +385,22 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     }
 
     const now = new Date().toISOString();
-    const dep: DepositRequest = {
-      id: 'dep-' + Date.now(),
+    const txId = 'dep-' + Date.now();
+
+    const newTx: TransactionRecord = {
+      id: txId,
+      userId: state.profile.user_id,
       user_id: state.profile.user_id,
       user_name: state.profile.full_name,
+      telephone: payload.payer_number,
+      type: 'DEPOT',
+      operateur: 'Airtel Money',
+      montant: payload.amount,
       amount: payload.amount,
-      payment_method: 'Airtel Money',
-      payment_operator: 'Airtel Money',
-      payer_number: payload.payer_number,
-      transaction_ref: payload.transaction_ref,
-      proof_name: payload.proof_name,
-      status: 'pending',
+      reference: payload.transaction_ref || '',
+      statut: 'EN_ATTENTE',
+      description: `Dépôt Airtel Money (${payload.payer_number})`,
+      date: now,
       created_at: now,
     };
 
@@ -314,11 +413,15 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       created_at: now,
     };
 
-    setState((prev) => ({
-      ...prev,
-      deposits: [dep, ...prev.deposits],
-      notifications: [notif, ...prev.notifications],
-    }));
+    setState((prev) => {
+      const nextTransactions = [newTx, ...prev.transactions];
+      return {
+        ...prev,
+        transactions: nextTransactions,
+        deposits: deriveDepositsFromTransactions(nextTransactions),
+        notifications: [notif, ...prev.notifications],
+      };
+    });
 
     return { ok: true };
   };
@@ -355,17 +458,22 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         ...p,
         reserved_balance: p.reserved_balance + payload.amount,
       }));
-      const wit: WithdrawalRequest = {
+      const newTx: TransactionRecord = {
         id: 'wit-' + Date.now(),
+        userId: prev.profile.user_id,
         user_id: prev.profile.user_id,
         user_name: prev.profile.full_name,
-        amount: payload.amount,
-        fee,
-        net_amount: netAmount,
-        payment_method: payload.payment_method,
-        beneficiary_number: payload.beneficiary_number,
+        telephone: payload.beneficiary_number,
+        type: 'RETRAIT',
+        operateur: payload.payment_method,
+        montant: payload.amount,
+        amount: -payload.amount,
+        frais: fee,
+        montant_net: netAmount,
         beneficiary_name: payload.beneficiary_name,
-        status: 'pending',
+        statut: 'EN_ATTENTE',
+        description: `Retrait ${payload.payment_method} (${formatAR(netAmount)} net)`,
+        date: now,
         created_at: now,
       };
       const notif: NotificationItem = {
@@ -376,10 +484,12 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         is_read: false,
         created_at: now,
       };
+      const nextTransactions = [newTx, ...prev.transactions];
       return {
         ...prev,
         ...synced,
-        withdrawals: [wit, ...prev.withdrawals],
+        transactions: nextTransactions,
+        withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
         notifications: [notif, ...prev.notifications],
       };
     });
@@ -415,10 +525,14 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       };
       const tx: TransactionRecord = {
         id: 'tx-' + Date.now(),
+        userId: prev.profile.user_id,
         user_id: prev.profile.user_id,
         type: 'investment',
+        montant: plan.price,
         amount: -plan.price,
+        statut: 'REUSSI',
         description: `Activation Portefeuille ${plan.name}`,
+        date: now,
         created_at: now,
       };
       const notif: NotificationItem = {
@@ -483,10 +597,14 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       };
       const tx: TransactionRecord = {
         id: 'tx-' + Date.now(),
+        userId: prev.profile.user_id,
         user_id: prev.profile.user_id,
         type: 'task_reward',
+        montant: plan.daily_task_reward,
         amount: plan.daily_task_reward,
+        statut: 'REUSSI',
         description: `Tâche de visionnage ${plan.name} (Note ${rating}/5)`,
+        date: now,
         created_at: now,
       };
       return {
@@ -509,36 +627,30 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
 
   const approveDeposit = async (id: string) => {
     setState((prev) => {
-      const target = prev.deposits.find((d) => d.id === id);
-      if (!target || target.status !== 'pending') return prev;
+      const target = prev.transactions.find(
+        (t) => t.id === id && t.type === 'DEPOT' && t.statut === 'EN_ATTENTE'
+      );
+      if (!target) return prev;
       const now = new Date().toISOString();
-      const synced = syncAccountProfile(prev, target.user_id, (p) => ({
+      const amount = Number(target.montant ?? 0);
+      const synced = syncAccountProfile(prev, target.userId, (p) => ({
         ...p,
-        balance: p.balance + target.amount,
+        balance: p.balance + amount,
       }));
+      const nextTransactions = prev.transactions.map((t) =>
+        t.id === id ? { ...t, statut: 'REUSSI' as const } : t
+      );
       return {
         ...prev,
         ...synced,
-        deposits: prev.deposits.map((d) =>
-          d.id === id ? { ...d, status: 'approved' } : d
-        ),
-        transactions: [
-          {
-            id: 'tx-' + Date.now(),
-            user_id: target.user_id,
-            type: 'deposit',
-            amount: target.amount,
-            description: `Dépôt ${target.payment_method} validé`,
-            created_at: now,
-          },
-          ...prev.transactions,
-        ],
+        transactions: nextTransactions,
+        deposits: deriveDepositsFromTransactions(nextTransactions),
         notifications: [
           {
             id: 'notif-' + Date.now(),
-            user_id: target.user_id,
+            user_id: target.userId,
             title: 'Dépôt validé',
-            message: `Votre dépôt de ${formatAR(target.amount)} a été crédité sur votre solde.`,
+            message: `Votre dépôt de ${formatAR(amount)} a été crédité sur votre solde.`,
             is_read: false,
             created_at: now,
           },
@@ -549,47 +661,48 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
   };
 
   const rejectDeposit = async (id: string) => {
-    setState((prev) => ({
-      ...prev,
-      deposits: prev.deposits.map((d) =>
-        d.id === id && d.status === 'pending' ? { ...d, status: 'rejected' } : d
-      ),
-    }));
+    setState((prev) => {
+      const nextTransactions = prev.transactions.map((t) =>
+        t.id === id && t.type === 'DEPOT' && t.statut === 'EN_ATTENTE'
+          ? { ...t, statut: 'REFUSE' as const }
+          : t
+      );
+      return {
+        ...prev,
+        transactions: nextTransactions,
+        deposits: deriveDepositsFromTransactions(nextTransactions),
+      };
+    });
   };
 
   const approveWithdrawal = async (id: string) => {
     setState((prev) => {
-      const target = prev.withdrawals.find((w) => w.id === id);
-      if (!target || target.status !== 'pending') return prev;
+      const target = prev.transactions.find(
+        (t) => t.id === id && t.type === 'RETRAIT' && t.statut === 'EN_ATTENTE'
+      );
+      if (!target) return prev;
       const now = new Date().toISOString();
-      const synced = syncAccountProfile(prev, target.user_id, (p) => ({
+      const amount = Number(target.montant ?? 0);
+      const netAmount = Number(target.montant_net ?? amount);
+      const synced = syncAccountProfile(prev, target.userId, (p) => ({
         ...p,
-        balance: Math.max(0, p.balance - target.amount),
-        reserved_balance: Math.max(0, p.reserved_balance - target.amount),
+        balance: Math.max(0, p.balance - amount),
+        reserved_balance: Math.max(0, p.reserved_balance - amount),
       }));
+      const nextTransactions = prev.transactions.map((t) =>
+        t.id === id ? { ...t, statut: 'REUSSI' as const } : t
+      );
       return {
         ...prev,
         ...synced,
-        withdrawals: prev.withdrawals.map((w) =>
-          w.id === id ? { ...w, status: 'approved' } : w
-        ),
-        transactions: [
-          {
-            id: 'tx-' + Date.now(),
-            user_id: target.user_id,
-            type: 'withdrawal',
-            amount: -target.amount,
-            description: `Retrait ${target.payment_method} approuvé`,
-            created_at: now,
-          },
-          ...prev.transactions,
-        ],
+        transactions: nextTransactions,
+        withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
         notifications: [
           {
             id: 'notif-' + Date.now(),
-            user_id: target.user_id,
+            user_id: target.userId,
             title: 'Retrait approuvé',
-            message: `Votre retrait de ${formatAR(target.net_amount)} net a été envoyé via ${target.payment_method}.`,
+            message: `Votre retrait de ${formatAR(netAmount)} net a été envoyé via ${target.operateur}.`,
             is_read: false,
             created_at: now,
           },
@@ -601,18 +714,23 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
 
   const rejectWithdrawal = async (id: string) => {
     setState((prev) => {
-      const target = prev.withdrawals.find((w) => w.id === id);
-      if (!target || target.status !== 'pending') return prev;
-      const synced = syncAccountProfile(prev, target.user_id, (p) => ({
+      const target = prev.transactions.find(
+        (t) => t.id === id && t.type === 'RETRAIT' && t.statut === 'EN_ATTENTE'
+      );
+      if (!target) return prev;
+      const amount = Number(target.montant ?? 0);
+      const synced = syncAccountProfile(prev, target.userId, (p) => ({
         ...p,
-        reserved_balance: Math.max(0, p.reserved_balance - target.amount),
+        reserved_balance: Math.max(0, p.reserved_balance - amount),
       }));
+      const nextTransactions = prev.transactions.map((t) =>
+        t.id === id ? { ...t, statut: 'REFUSE' as const } : t
+      );
       return {
         ...prev,
         ...synced,
-        withdrawals: prev.withdrawals.map((w) =>
-          w.id === id ? { ...w, status: 'rejected' } : w
-        ),
+        transactions: nextTransactions,
+        withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
       };
     });
   };
@@ -625,6 +743,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         signup,
         loginAdmin,
         logout,
+        reloadFromStorage,
         submitDeposit,
         submitWithdrawal,
         investInPlan,
