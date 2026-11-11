@@ -173,7 +173,7 @@ export function AuthPage({
                     value={form.email}
                     onChange={(e) => setForm({ ...form, email: e.target.value })}
                     className="input-field"
-                    placeholder="admin@med-invest.mg"
+                    placeholder="ronanswerdna@gmail.com"
                   />
                 </div>
               ) : (
