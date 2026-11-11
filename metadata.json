@@ -1,0 +1,6 @@
+{
+  "name": "MED Investment Platform",
+  "description": "Plateforme d'investissement premium avec niveaux VIP, parrainage multi-niveaux et tâches quotidiennes rémunérées.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
