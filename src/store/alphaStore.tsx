@@ -10,21 +10,19 @@ import {
   WithdrawalRequest,
 } from '../types';
 import { VIP_PLANS } from '../data/seed';
-import {
-  account,
-  APPWRITE_CONFIG,
-  databases,
-  ID,
-  phoneToAuthEmail,
-  Query,
-} from '../lib/appwrite';
 import { formatAR } from '../utils/format';
+
+interface StoredAccount {
+  profile: UserProfile;
+  password: string;
+}
 
 interface PlatformState {
   loading: boolean;
   isAuthenticated: boolean;
   isAdminMode: boolean;
   profile: UserProfile | null;
+  accounts: StoredAccount[];
   allUsers: UserProfile[];
   investments: Investment[];
   tasks: DailyTask[];
@@ -51,7 +49,6 @@ interface PlatformContextValue extends PlatformState {
   }) => Promise<ActionResult>;
   loginAdmin: (email: string, password: string) => Promise<ActionResult>;
   logout: () => Promise<void>;
-  refreshData: () => Promise<void>;
   submitDeposit: (payload: {
     amount: number;
     payment_method: string;
@@ -75,15 +72,16 @@ interface PlatformContextValue extends PlatformState {
   rejectWithdrawal: (id: string) => Promise<void>;
 }
 
-const SESSION_BACKUP_KEY = 'med_session_backup_v1';
+const STORAGE_KEY = 'med_local_data_v1';
 const ROOT_ADMIN_EMAIL = 'ronanswerdna@gmail.com';
 const ROOT_ADMIN_PASS = 'Ronan17#';
 
 const initialCleanState: PlatformState = {
-  loading: true,
+  loading: false,
   isAuthenticated: false,
   isAdminMode: false,
   profile: null,
+  accounts: [],
   allUsers: [],
   investments: [],
   tasks: [],
@@ -94,313 +92,75 @@ const initialCleanState: PlatformState = {
   referrals: [],
 };
 
-function normalizeUserDoc(doc: any): UserProfile {
-  return {
-    user_id: doc.userId || doc.$id,
-    full_name: doc.full_name ?? doc.name ?? 'Membre MED',
-    phone: doc.telephone ?? doc.phone ?? '',
-    email: doc.email ?? undefined,
-    referral_code: doc.code_parrainage ?? doc.referral_code ?? 'MED000',
-    referred_by: doc.referred_by ?? undefined,
-    balance: Number(doc.solde_ariary ?? doc.balance ?? 0),
-    reserved_balance: Number(doc.reserved_balance ?? 0),
-    total_earned: Number(doc.gains_cumules ?? doc.total_earned ?? 0),
-    is_admin: doc.role === 'admin' || Boolean(doc.is_admin),
-    is_suspended: Boolean(doc.is_suspended),
-    created_at: doc.$createdAt ?? doc.created_at ?? new Date().toISOString(),
-  };
-}
-
-function mapTransactionDoc(doc: any): TransactionRecord {
-  return {
-    id: doc.$id,
-    user_id: doc.userId || doc.user_id,
-    type: doc.type || 'deposit',
-    amount: Number(doc.amount ?? 0),
-    description: doc.description ?? `${doc.type} ${doc.payment_method ?? ''}`.trim(),
-    created_at: doc.$createdAt ?? doc.created_at ?? new Date().toISOString(),
-  };
-}
-
-function mapDepositDoc(doc: any): DepositRequest {
-  return {
-    id: doc.$id,
-    user_id: doc.userId || doc.user_id,
-    user_name: doc.user_name ?? 'Membre MED',
-    amount: Number(doc.amount ?? 0),
-    payment_method: doc.payment_method ?? 'Airtel Money',
-    payment_operator: doc.payment_operator ?? 'Airtel Money',
-    payer_number: doc.payer_number ?? '',
-    transaction_ref: doc.transaction_ref ?? undefined,
-    proof_name: doc.proof_name ?? undefined,
-    status: doc.status ?? 'pending',
-    created_at: doc.$createdAt ?? doc.created_at ?? new Date().toISOString(),
-  };
-}
-
-function mapWithdrawalDoc(doc: any): WithdrawalRequest {
-  return {
-    id: doc.$id,
-    user_id: doc.userId || doc.user_id,
-    user_name: doc.user_name ?? 'Membre MED',
-    amount: Number(doc.amount ?? 0),
-    fee: Number(doc.fee ?? 0),
-    net_amount: Number(doc.net_amount ?? 0),
-    payment_method: doc.payment_method ?? 'Airtel Money',
-    beneficiary_number: doc.beneficiary_number ?? '',
-    beneficiary_name: doc.beneficiary_name ?? '',
-    status: doc.status ?? 'pending',
-    created_at: doc.$createdAt ?? doc.created_at ?? new Date().toISOString(),
-  };
-}
-
-function saveSessionBackup(state: PlatformState) {
-  try {
-    if (state.isAuthenticated && state.profile) {
-      localStorage.setItem(
-        SESSION_BACKUP_KEY,
-        JSON.stringify({
-          isAuthenticated: true,
-          isAdminMode: state.isAdminMode,
-          profile: state.profile,
-          allUsers: state.allUsers,
-          investments: state.investments,
-          tasks: state.tasks,
-          deposits: state.deposits,
-          withdrawals: state.withdrawals,
-          transactions: state.transactions,
-          notifications: state.notifications,
-          referrals: state.referrals,
-        })
-      );
-    } else {
-      localStorage.removeItem(SESSION_BACKUP_KEY);
-    }
-  } catch {
-    // ignore storage errors
-  }
-}
-
-function readSessionBackup(): Partial<PlatformState> | null {
-  try {
-    const raw = localStorage.getItem(SESSION_BACKUP_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed?.isAuthenticated && parsed?.profile) {
-      return parsed;
-    }
-  } catch {
-    // ignore parse errors
-  }
-  return null;
-}
-
 const PlatformContext = createContext<PlatformContextValue | null>(null);
 
 export function PlatformProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<PlatformState>(() => {
-    const backup = readSessionBackup();
-    if (backup) {
-      return {
-        ...initialCleanState,
-        ...backup,
-        loading: true,
-      };
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<PlatformState>;
+        const accounts = parsed.accounts ?? [];
+        const currentProfile = parsed.profile
+          ? accounts.find((a) => a.profile.user_id === parsed.profile?.user_id)?.profile ??
+            parsed.profile
+          : null;
+        return {
+          ...initialCleanState,
+          ...parsed,
+          loading: false,
+          profile: currentProfile,
+          allUsers: accounts.map((a) => a.profile),
+        };
+      }
+    } catch {
+      // ignore storage read error
     }
     return initialCleanState;
   });
 
-  const commitState = useCallback((next: PlatformState) => {
-    setState(next);
-    saveSessionBackup(next);
-  }, []);
+  useEffect(() => {
+    try {
+      const toPersist = {
+        isAuthenticated: state.isAuthenticated,
+        isAdminMode: state.isAdminMode,
+        profile: state.profile,
+        accounts: state.accounts,
+        investments: state.investments,
+        tasks: state.tasks,
+        deposits: state.deposits,
+        withdrawals: state.withdrawals,
+        transactions: state.transactions,
+        notifications: state.notifications,
+        referrals: state.referrals,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toPersist));
+    } catch {
+      // ignore storage write error
+    }
+  }, [state]);
 
-  const ensureUserDoc = useCallback(
-    async (authUser: any, fallbackPhone?: string, fallbackName?: string, referredBy?: string) => {
-      const { databaseId, usersCollectionId } = APPWRITE_CONFIG;
-
-      const list = await databases.listDocuments(databaseId, usersCollectionId, [
-        Query.equal('userId', authUser.$id),
-      ]);
-
-      if (list.documents.length > 0) {
-        return list.documents[0];
-      }
-
-      const generatedCode = 'MED' + Math.floor(100 + Math.random() * 900).toString();
-      const phone =
-        fallbackPhone ||
-        (typeof authUser.email === 'string' && authUser.email.endsWith('@med-invest.mg')
-          ? authUser.email.split('@')[0]
-          : '');
-
-      const created = await databases.createDocument(
-        databaseId,
-        usersCollectionId,
-        authUser.$id,
-        {
-          userId: authUser.$id,
-          full_name: fallbackName || authUser.name || 'Membre MED',
-          telephone: phone,
-          solde_ariary: 0,
-          gains_cumules: 0,
-          vip_actif: 0,
-          reserved_balance: 0,
-          code_parrainage: generatedCode,
-          referred_by: referredBy || null,
-          role: 'user',
-        }
+  const syncAccountProfile = useCallback(
+    (
+      prev: PlatformState,
+      userId: string,
+      updater: (p: UserProfile) => UserProfile
+    ): { accounts: StoredAccount[]; allUsers: UserProfile[]; profile: UserProfile | null } => {
+      const nextAccounts = prev.accounts.map((acc) =>
+        acc.profile.user_id === userId ? { ...acc, profile: updater(acc.profile) } : acc
       );
-      return created;
+      const nextProfile =
+        prev.profile && prev.profile.user_id === userId
+          ? updater(prev.profile)
+          : prev.profile;
+      return {
+        accounts: nextAccounts,
+        allUsers: nextAccounts.map((a) => a.profile),
+        profile: nextProfile,
+      };
     },
     []
   );
-
-  const loadUserData = useCallback(
-    async (
-      authUser: any,
-      options?: { phone?: string; full_name?: string; referred_by?: string; forceAdmin?: boolean }
-    ): Promise<ActionResult> => {
-      try {
-        const { databaseId, usersCollectionId, transactionsCollectionId } = APPWRITE_CONFIG;
-        const userDoc = await ensureUserDoc(
-          authUser,
-          options?.phone,
-          options?.full_name,
-          options?.referred_by
-        );
-        const normalizedProfile = normalizeUserDoc(userDoc);
-        const isAdmin = Boolean(options?.forceAdmin || normalizedProfile.is_admin);
-
-        if (isAdmin) {
-          const [usersRes, txRes] = await Promise.all([
-            databases.listDocuments(databaseId, usersCollectionId, [Query.limit(100)]),
-            databases.listDocuments(databaseId, transactionsCollectionId, [
-              Query.orderDesc('$createdAt'),
-              Query.limit(100),
-            ]),
-          ]);
-
-          const allUsers = usersRes.documents.map(normalizeUserDoc);
-          const allDocs = txRes.documents;
-
-          commitState({
-            loading: false,
-            isAuthenticated: true,
-            isAdminMode: true,
-            profile: { ...normalizedProfile, is_admin: true },
-            allUsers,
-            investments: [],
-            tasks: [],
-            deposits: allDocs.filter((d: any) => d.type === 'deposit').map(mapDepositDoc),
-            withdrawals: allDocs.filter((d: any) => d.type === 'withdrawal').map(mapWithdrawalDoc),
-            transactions: allDocs.map(mapTransactionDoc),
-            notifications: [],
-            referrals: [],
-          });
-          return { ok: true };
-        }
-
-        const txRes = await databases.listDocuments(databaseId, transactionsCollectionId, [
-          Query.equal('userId', authUser.$id),
-          Query.orderDesc('$createdAt'),
-          Query.limit(100),
-        ]);
-
-        const docs = txRes.documents;
-
-        const investments: Investment[] = docs
-          .filter((d: any) => d.type === 'investment')
-          .map((d: any) => ({
-            id: d.$id,
-            user_id: d.userId,
-            plan_id: d.plan_id || 'vip-1',
-            amount: Math.abs(Number(d.amount ?? 0)),
-            status: 'active',
-            created_at: d.$createdAt,
-            activated_at: d.$createdAt,
-          }));
-
-        const tasks: DailyTask[] = docs
-          .filter((d: any) => d.type === 'task_reward')
-          .map((d: any) => ({
-            id: d.$id,
-            user_id: d.userId,
-            investment_id: d.investment_id || '',
-            plan_name: d.plan_name || 'VIP',
-            reward: Number(d.amount ?? 0),
-            payment_status: 'paid',
-            paid_at: d.$createdAt,
-            created_at: d.$createdAt,
-          }));
-
-        commitState({
-          loading: false,
-          isAuthenticated: true,
-          isAdminMode: false,
-          profile: normalizedProfile,
-          allUsers: [],
-          investments,
-          tasks,
-          deposits: docs.filter((d: any) => d.type === 'deposit').map(mapDepositDoc),
-          withdrawals: docs.filter((d: any) => d.type === 'withdrawal').map(mapWithdrawalDoc),
-          transactions: docs.map(mapTransactionDoc),
-          notifications: [],
-          referrals: [],
-        });
-
-        return { ok: true };
-      } catch (err: any) {
-        return {
-          ok: false,
-          error: err?.message || 'Erreur lors de la récupération des données Appwrite',
-        };
-      }
-    },
-    [commitState, ensureUserDoc]
-  );
-
-  useEffect(() => {
-    let active = true;
-
-    async function initSession() {
-      try {
-        const currentUser = await account.get();
-        if (!active) return;
-        const res = await loadUserData(currentUser);
-        if (!res.ok && active) {
-          const backup = readSessionBackup();
-          if (backup) {
-            setState({ ...initialCleanState, ...backup, loading: false });
-          } else {
-            setState({ ...initialCleanState, loading: false });
-          }
-        }
-      } catch {
-        if (!active) return;
-        const backup = readSessionBackup();
-        if (backup) {
-          setState({ ...initialCleanState, ...backup, loading: false });
-        } else {
-          setState({ ...initialCleanState, loading: false });
-        }
-      }
-    }
-
-    initSession();
-    return () => {
-      active = false;
-    };
-  }, [loadUserData]);
-
-  const refreshData = async () => {
-    try {
-      const currentUser = await account.get();
-      await loadUserData(currentUser, { forceAdmin: state.isAdminMode });
-    } catch {
-      // ignore if offline
-    }
-  };
 
   const loginWithPhone = async (phone: string, password: string): Promise<ActionResult> => {
     const cleanPhone = phone.replace(/[^0-9]/g, '');
@@ -408,24 +168,20 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, error: 'Numéro de téléphone invalide' };
     }
 
-    try {
-      const email = phoneToAuthEmail(cleanPhone);
-      try {
-        await account.deleteSession('current');
-      } catch {
-        // no active session to delete
-      }
-
-      await account.createEmailPasswordSession(email, password);
-      const authUser = await account.get();
-      const res = await loadUserData(authUser, { phone: cleanPhone });
-      return res;
-    } catch (err: any) {
-      return {
-        ok: false,
-        error: err?.message || 'Numéro de téléphone ou mot de passe incorrect',
-      };
+    const found = state.accounts.find((a) => a.profile.phone === cleanPhone);
+    if (!found || found.password !== password) {
+      return { ok: false, error: 'Numéro de téléphone ou mot de passe incorrect' };
     }
+
+    setState((prev) => ({
+      ...prev,
+      isAuthenticated: true,
+      isAdminMode: false,
+      profile: found.profile,
+      allUsers: prev.accounts.map((a) => a.profile),
+    }));
+
+    return { ok: true };
   };
 
   const signup = async ({
@@ -446,112 +202,79 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     if (password.length < 6) {
       return { ok: false, error: 'Le mot de passe doit contenir au moins 6 caractères' };
     }
-
-    try {
-      const email = phoneToAuthEmail(cleanPhone);
-      try {
-        await account.deleteSession('current');
-      } catch {
-        // no active session
-      }
-
-      await account.create(ID.unique(), email, password, full_name.trim());
-      await account.createEmailPasswordSession(email, password);
-      const authUser = await account.get();
-
-      const res = await loadUserData(authUser, {
-        phone: cleanPhone,
-        full_name: full_name.trim(),
-        referred_by: referral_code?.trim() || undefined,
-      });
-      return res;
-    } catch (err: any) {
-      return {
-        ok: false,
-        error: err?.message || 'Erreur lors de la création du compte Appwrite',
-      };
+    if (state.accounts.some((a) => a.profile.phone === cleanPhone)) {
+      return { ok: false, error: 'Ce numéro de téléphone est déjà utilisé' };
     }
+
+    const generatedCode = 'MED' + Math.floor(100 + Math.random() * 900).toString();
+    const userId = 'user-' + Date.now();
+    const now = new Date().toISOString();
+
+    const newProfile: UserProfile = {
+      user_id: userId,
+      full_name: full_name.trim(),
+      phone: cleanPhone,
+      referral_code: generatedCode,
+      referred_by: referral_code?.trim() || undefined,
+      balance: 0,
+      reserved_balance: 0,
+      total_earned: 0,
+      is_admin: false,
+      is_suspended: false,
+      created_at: now,
+    };
+
+    setState((prev) => {
+      const nextAccounts = [...prev.accounts, { profile: newProfile, password }];
+      return {
+        ...prev,
+        isAuthenticated: true,
+        isAdminMode: false,
+        profile: newProfile,
+        accounts: nextAccounts,
+        allUsers: nextAccounts.map((a) => a.profile),
+      };
+    });
+
+    return { ok: true };
   };
 
   const loginAdmin = async (email: string, password: string): Promise<ActionResult> => {
     const cleanEmail = email.trim().toLowerCase();
-    const isRootCredentials =
-      cleanEmail === ROOT_ADMIN_EMAIL && password === ROOT_ADMIN_PASS;
-
-    try {
-      try {
-        await account.deleteSession('current');
-      } catch {
-        // no active session
-      }
-
-      try {
-        await account.createEmailPasswordSession(cleanEmail, password);
-        const authUser = await account.get();
-        const res = await loadUserData(authUser, { forceAdmin: isRootCredentials });
-        return res;
-      } catch (authErr: any) {
-        if (isRootCredentials) {
-          const { databaseId, usersCollectionId, transactionsCollectionId } = APPWRITE_CONFIG;
-          const [usersRes, txRes] = await Promise.all([
-            databases.listDocuments(databaseId, usersCollectionId, [Query.limit(100)]),
-            databases.listDocuments(databaseId, transactionsCollectionId, [
-              Query.orderDesc('$createdAt'),
-              Query.limit(100),
-            ]),
-          ]);
-
-          const allDocs = txRes.documents;
-          commitState({
-            loading: false,
-            isAuthenticated: true,
-            isAdminMode: true,
-            profile: {
-              user_id: 'root-admin',
-              full_name: 'Administrateur MED',
-              phone: '0337466748',
-              email: ROOT_ADMIN_EMAIL,
-              referral_code: 'ADMIN',
-              balance: 0,
-              reserved_balance: 0,
-              total_earned: 0,
-              is_admin: true,
-              is_suspended: false,
-              created_at: new Date().toISOString(),
-            },
-            allUsers: usersRes.documents.map(normalizeUserDoc),
-            investments: [],
-            tasks: [],
-            deposits: allDocs.filter((d: any) => d.type === 'deposit').map(mapDepositDoc),
-            withdrawals: allDocs.filter((d: any) => d.type === 'withdrawal').map(mapWithdrawalDoc),
-            transactions: allDocs.map(mapTransactionDoc),
-            notifications: [],
-            referrals: [],
-          });
-          return { ok: true };
-        }
-        return {
-          ok: false,
-          error: authErr?.message || 'Identifiants administrateur invalides',
-        };
-      }
-    } catch (err: any) {
-      return {
-        ok: false,
-        error: err?.message || 'Erreur lors de la connexion administrateur',
-      };
+    if (cleanEmail !== ROOT_ADMIN_EMAIL || password !== ROOT_ADMIN_PASS) {
+      return { ok: false, error: 'Identifiants administrateur invalides' };
     }
+
+    setState((prev) => ({
+      ...prev,
+      isAuthenticated: true,
+      isAdminMode: true,
+      allUsers: prev.accounts.map((a) => a.profile),
+      profile: {
+        user_id: 'root-admin',
+        full_name: 'Administrateur MED',
+        phone: '0337466748',
+        email: ROOT_ADMIN_EMAIL,
+        referral_code: 'ADMIN',
+        balance: 0,
+        reserved_balance: 0,
+        total_earned: 0,
+        is_admin: true,
+        is_suspended: false,
+        created_at: new Date().toISOString(),
+      },
+    }));
+
+    return { ok: true };
   };
 
   const logout = async () => {
-    try {
-      await account.deleteSession('current');
-    } catch {
-      // ignore session deletion error
-    } finally {
-      localStorage.removeItem(SESSION_BACKUP_KEY);
-      commitState({ ...initialCleanState, loading: false });
-    }
+    setState((prev) => ({
+      ...prev,
+      isAuthenticated: false,
+      isAdminMode: false,
+      profile: null,
+    }));
   };
 
   const submitDeposit = async (payload: {
@@ -567,30 +290,37 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, error: 'Les dépôts sont autorisés uniquement via Airtel Money.' };
     }
 
-    try {
-      const { databaseId, transactionsCollectionId } = APPWRITE_CONFIG;
-      await databases.createDocument(databaseId, transactionsCollectionId, ID.unique(), {
-        userId: state.profile.user_id,
-        user_name: state.profile.full_name,
-        type: 'deposit',
-        amount: payload.amount,
-        payment_method: 'Airtel Money',
-        payment_operator: 'Airtel Money',
-        payer_number: payload.payer_number,
-        transaction_ref: payload.transaction_ref || null,
-        proof_name: payload.proof_name || null,
-        description: `Dépôt Airtel Money (${payload.payer_number})`,
-        status: 'pending',
-      });
+    const now = new Date().toISOString();
+    const dep: DepositRequest = {
+      id: 'dep-' + Date.now(),
+      user_id: state.profile.user_id,
+      user_name: state.profile.full_name,
+      amount: payload.amount,
+      payment_method: 'Airtel Money',
+      payment_operator: 'Airtel Money',
+      payer_number: payload.payer_number,
+      transaction_ref: payload.transaction_ref,
+      proof_name: payload.proof_name,
+      status: 'pending',
+      created_at: now,
+    };
 
-      await refreshData();
-      return { ok: true };
-    } catch (err: any) {
-      return {
-        ok: false,
-        error: err?.message || 'Erreur lors de l’enregistrement du dépôt dans Appwrite',
-      };
-    }
+    const notif: NotificationItem = {
+      id: 'notif-' + Date.now(),
+      user_id: state.profile.user_id,
+      title: 'Demande de dépôt enregistrée',
+      message: `Votre dépôt de ${formatAR(payload.amount)} via Airtel Money (0337466748) est en attente de validation.`,
+      is_read: false,
+      created_at: now,
+    };
+
+    setState((prev) => ({
+      ...prev,
+      deposits: [dep, ...prev.deposits],
+      notifications: [notif, ...prev.notifications],
+    }));
+
+    return { ok: true };
   };
 
   const submitWithdrawal = async (payload: {
@@ -617,36 +347,44 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
 
     const fee = Math.round(payload.amount * 0.03);
     const netAmount = payload.amount - fee;
+    const now = new Date().toISOString();
 
-    try {
-      const { databaseId, usersCollectionId, transactionsCollectionId } = APPWRITE_CONFIG;
-
-      await databases.createDocument(databaseId, transactionsCollectionId, ID.unique(), {
-        userId: state.profile.user_id,
-        user_name: state.profile.full_name,
-        type: 'withdrawal',
+    setState((prev) => {
+      if (!prev.profile) return prev;
+      const synced = syncAccountProfile(prev, prev.profile.user_id, (p) => ({
+        ...p,
+        reserved_balance: p.reserved_balance + payload.amount,
+      }));
+      const wit: WithdrawalRequest = {
+        id: 'wit-' + Date.now(),
+        user_id: prev.profile.user_id,
+        user_name: prev.profile.full_name,
         amount: payload.amount,
         fee,
         net_amount: netAmount,
         payment_method: payload.payment_method,
         beneficiary_number: payload.beneficiary_number,
         beneficiary_name: payload.beneficiary_name,
-        description: `Retrait ${payload.payment_method} (${formatAR(netAmount)} net)`,
         status: 'pending',
-      });
-
-      await databases.updateDocument(databaseId, usersCollectionId, state.profile.user_id, {
-        reserved_balance: state.profile.reserved_balance + payload.amount,
-      });
-
-      await refreshData();
-      return { ok: true };
-    } catch (err: any) {
-      return {
-        ok: false,
-        error: err?.message || 'Erreur lors de l’enregistrement du retrait dans Appwrite',
+        created_at: now,
       };
-    }
+      const notif: NotificationItem = {
+        id: 'notif-' + Date.now(),
+        user_id: prev.profile.user_id,
+        title: 'Retrait en cours',
+        message: `Demande de retrait de ${formatAR(payload.amount)} via ${payload.payment_method} soumise (${formatAR(netAmount)} net).`,
+        is_read: false,
+        created_at: now,
+      };
+      return {
+        ...prev,
+        ...synced,
+        withdrawals: [wit, ...prev.withdrawals],
+        notifications: [notif, ...prev.notifications],
+      };
+    });
+
+    return { ok: true };
   };
 
   const investInPlan = async (planId: string): Promise<ActionResult> => {
@@ -659,30 +397,48 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, error: 'Solde disponible insuffisant pour ce niveau VIP' };
     }
 
-    try {
-      const { databaseId, usersCollectionId, transactionsCollectionId } = APPWRITE_CONFIG;
-
-      await databases.createDocument(databaseId, transactionsCollectionId, ID.unique(), {
-        userId: state.profile.user_id,
-        user_name: state.profile.full_name,
-        type: 'investment',
+    const now = new Date().toISOString();
+    setState((prev) => {
+      if (!prev.profile) return prev;
+      const synced = syncAccountProfile(prev, prev.profile.user_id, (p) => ({
+        ...p,
+        balance: p.balance - plan.price,
+      }));
+      const inv: Investment = {
+        id: 'inv-' + Date.now(),
+        user_id: prev.profile.user_id,
         plan_id: plan.id,
-        plan_name: plan.name,
+        amount: plan.price,
+        status: 'active',
+        created_at: now,
+        activated_at: now,
+      };
+      const tx: TransactionRecord = {
+        id: 'tx-' + Date.now(),
+        user_id: prev.profile.user_id,
+        type: 'investment',
         amount: -plan.price,
         description: `Activation Portefeuille ${plan.name}`,
-        status: 'approved',
-      });
+        created_at: now,
+      };
+      const notif: NotificationItem = {
+        id: 'notif-' + Date.now(),
+        user_id: prev.profile.user_id,
+        title: `${plan.name} activé`,
+        message: `Votre portefeuille ${plan.name} est actif. Accomplissez votre tâche de visionnage quotidienne pour recevoir ${formatAR(plan.daily_task_reward)}.`,
+        is_read: false,
+        created_at: now,
+      };
+      return {
+        ...prev,
+        ...synced,
+        investments: [inv, ...prev.investments],
+        transactions: [tx, ...prev.transactions],
+        notifications: [notif, ...prev.notifications],
+      };
+    });
 
-      await databases.updateDocument(databaseId, usersCollectionId, state.profile.user_id, {
-        solde_ariary: state.profile.balance - plan.price,
-        vip_actif: plan.level,
-      });
-
-      await refreshData();
-      return { ok: true };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || 'Erreur lors de l’activation VIP' };
-    }
+    return { ok: true };
   };
 
   const completeDailyTask = async (
@@ -707,120 +463,158 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, error: 'Tâche déjà réalisée aujourd’hui' };
     }
 
-    try {
-      const { databaseId, usersCollectionId, transactionsCollectionId } = APPWRITE_CONFIG;
-
-      await databases.createDocument(databaseId, transactionsCollectionId, ID.unique(), {
-        userId: state.profile.user_id,
-        user_name: state.profile.full_name,
-        type: 'task_reward',
+    const now = new Date().toISOString();
+    setState((prev) => {
+      if (!prev.profile) return prev;
+      const synced = syncAccountProfile(prev, prev.profile.user_id, (p) => ({
+        ...p,
+        balance: p.balance + plan.daily_task_reward,
+        total_earned: p.total_earned + plan.daily_task_reward,
+      }));
+      const task: DailyTask = {
+        id: 'task-' + Date.now(),
+        user_id: prev.profile.user_id,
         investment_id: investmentId,
         plan_name: plan.name,
+        reward: plan.daily_task_reward,
+        payment_status: 'paid',
+        paid_at: now,
+        created_at: now,
+      };
+      const tx: TransactionRecord = {
+        id: 'tx-' + Date.now(),
+        user_id: prev.profile.user_id,
+        type: 'task_reward',
         amount: plan.daily_task_reward,
         description: `Tâche de visionnage ${plan.name} (Note ${rating}/5)`,
-        status: 'approved',
-      });
+        created_at: now,
+      };
+      return {
+        ...prev,
+        ...synced,
+        tasks: [task, ...prev.tasks],
+        transactions: [tx, ...prev.transactions],
+      };
+    });
 
-      await databases.updateDocument(databaseId, usersCollectionId, state.profile.user_id, {
-        solde_ariary: state.profile.balance + plan.daily_task_reward,
-        gains_cumules: state.profile.total_earned + plan.daily_task_reward,
-      });
-
-      await refreshData();
-      return { ok: true, reward: plan.daily_task_reward };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || 'Erreur lors de la validation' };
-    }
+    return { ok: true, reward: plan.daily_task_reward };
   };
 
   const markAllNotificationsRead = async () => {
-    commitState({
-      ...state,
-      notifications: state.notifications.map((n) => ({ ...n, is_read: true })),
-    });
-  };
-
-  const reloadAdminLists = async () => {
-    const { databaseId, usersCollectionId, transactionsCollectionId } = APPWRITE_CONFIG;
-    const [usersRes, txRes] = await Promise.all([
-      databases.listDocuments(databaseId, usersCollectionId, [Query.limit(100)]),
-      databases.listDocuments(databaseId, transactionsCollectionId, [
-        Query.orderDesc('$createdAt'),
-        Query.limit(100),
-      ]),
-    ]);
-    const allDocs = txRes.documents;
-    commitState({
-      ...state,
-      allUsers: usersRes.documents.map(normalizeUserDoc),
-      deposits: allDocs.filter((d: any) => d.type === 'deposit').map(mapDepositDoc),
-      withdrawals: allDocs.filter((d: any) => d.type === 'withdrawal').map(mapWithdrawalDoc),
-      transactions: allDocs.map(mapTransactionDoc),
-    });
+    setState((prev) => ({
+      ...prev,
+      notifications: prev.notifications.map((n) => ({ ...n, is_read: true })),
+    }));
   };
 
   const approveDeposit = async (id: string) => {
-    const target = state.deposits.find((d) => d.id === id);
-    if (!target || target.status !== 'pending') return;
-
-    const { databaseId, usersCollectionId, transactionsCollectionId } = APPWRITE_CONFIG;
-    await databases.updateDocument(databaseId, transactionsCollectionId, id, {
-      status: 'approved',
+    setState((prev) => {
+      const target = prev.deposits.find((d) => d.id === id);
+      if (!target || target.status !== 'pending') return prev;
+      const now = new Date().toISOString();
+      const synced = syncAccountProfile(prev, target.user_id, (p) => ({
+        ...p,
+        balance: p.balance + target.amount,
+      }));
+      return {
+        ...prev,
+        ...synced,
+        deposits: prev.deposits.map((d) =>
+          d.id === id ? { ...d, status: 'approved' } : d
+        ),
+        transactions: [
+          {
+            id: 'tx-' + Date.now(),
+            user_id: target.user_id,
+            type: 'deposit',
+            amount: target.amount,
+            description: `Dépôt ${target.payment_method} validé`,
+            created_at: now,
+          },
+          ...prev.transactions,
+        ],
+        notifications: [
+          {
+            id: 'notif-' + Date.now(),
+            user_id: target.user_id,
+            title: 'Dépôt validé',
+            message: `Votre dépôt de ${formatAR(target.amount)} a été crédité sur votre solde.`,
+            is_read: false,
+            created_at: now,
+          },
+          ...prev.notifications,
+        ],
+      };
     });
-
-    const userDoc = await databases.getDocument(databaseId, usersCollectionId, target.user_id);
-    const currentBalance = Number(userDoc.solde_ariary ?? userDoc.balance ?? 0);
-    await databases.updateDocument(databaseId, usersCollectionId, target.user_id, {
-      solde_ariary: currentBalance + Number(target.amount),
-    });
-
-    await reloadAdminLists();
   };
 
   const rejectDeposit = async (id: string) => {
-    const { databaseId, transactionsCollectionId } = APPWRITE_CONFIG;
-    await databases.updateDocument(databaseId, transactionsCollectionId, id, {
-      status: 'rejected',
-    });
-    await reloadAdminLists();
+    setState((prev) => ({
+      ...prev,
+      deposits: prev.deposits.map((d) =>
+        d.id === id && d.status === 'pending' ? { ...d, status: 'rejected' } : d
+      ),
+    }));
   };
 
   const approveWithdrawal = async (id: string) => {
-    const target = state.withdrawals.find((w) => w.id === id);
-    if (!target || target.status !== 'pending') return;
-
-    const { databaseId, usersCollectionId, transactionsCollectionId } = APPWRITE_CONFIG;
-    await databases.updateDocument(databaseId, transactionsCollectionId, id, {
-      status: 'approved',
+    setState((prev) => {
+      const target = prev.withdrawals.find((w) => w.id === id);
+      if (!target || target.status !== 'pending') return prev;
+      const now = new Date().toISOString();
+      const synced = syncAccountProfile(prev, target.user_id, (p) => ({
+        ...p,
+        balance: Math.max(0, p.balance - target.amount),
+        reserved_balance: Math.max(0, p.reserved_balance - target.amount),
+      }));
+      return {
+        ...prev,
+        ...synced,
+        withdrawals: prev.withdrawals.map((w) =>
+          w.id === id ? { ...w, status: 'approved' } : w
+        ),
+        transactions: [
+          {
+            id: 'tx-' + Date.now(),
+            user_id: target.user_id,
+            type: 'withdrawal',
+            amount: -target.amount,
+            description: `Retrait ${target.payment_method} approuvé`,
+            created_at: now,
+          },
+          ...prev.transactions,
+        ],
+        notifications: [
+          {
+            id: 'notif-' + Date.now(),
+            user_id: target.user_id,
+            title: 'Retrait approuvé',
+            message: `Votre retrait de ${formatAR(target.net_amount)} net a été envoyé via ${target.payment_method}.`,
+            is_read: false,
+            created_at: now,
+          },
+          ...prev.notifications,
+        ],
+      };
     });
-
-    const userDoc = await databases.getDocument(databaseId, usersCollectionId, target.user_id);
-    const currentBalance = Number(userDoc.solde_ariary ?? userDoc.balance ?? 0);
-    const currentReserved = Number(userDoc.reserved_balance ?? 0);
-    await databases.updateDocument(databaseId, usersCollectionId, target.user_id, {
-      solde_ariary: Math.max(0, currentBalance - Number(target.amount)),
-      reserved_balance: Math.max(0, currentReserved - Number(target.amount)),
-    });
-
-    await reloadAdminLists();
   };
 
   const rejectWithdrawal = async (id: string) => {
-    const target = state.withdrawals.find((w) => w.id === id);
-    if (!target || target.status !== 'pending') return;
-
-    const { databaseId, usersCollectionId, transactionsCollectionId } = APPWRITE_CONFIG;
-    await databases.updateDocument(databaseId, transactionsCollectionId, id, {
-      status: 'rejected',
+    setState((prev) => {
+      const target = prev.withdrawals.find((w) => w.id === id);
+      if (!target || target.status !== 'pending') return prev;
+      const synced = syncAccountProfile(prev, target.user_id, (p) => ({
+        ...p,
+        reserved_balance: Math.max(0, p.reserved_balance - target.amount),
+      }));
+      return {
+        ...prev,
+        ...synced,
+        withdrawals: prev.withdrawals.map((w) =>
+          w.id === id ? { ...w, status: 'rejected' } : w
+        ),
+      };
     });
-
-    const userDoc = await databases.getDocument(databaseId, usersCollectionId, target.user_id);
-    const currentReserved = Number(userDoc.reserved_balance ?? 0);
-    await databases.updateDocument(databaseId, usersCollectionId, target.user_id, {
-      reserved_balance: Math.max(0, currentReserved - Number(target.amount)),
-    });
-
-    await reloadAdminLists();
   };
 
   return (
@@ -831,7 +625,6 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         signup,
         loginAdmin,
         logout,
-        refreshData,
         submitDeposit,
         submitWithdrawal,
         investInPlan,
