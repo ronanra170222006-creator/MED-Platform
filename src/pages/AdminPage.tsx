@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowLeft, Check, Shield, X } from 'lucide-react';
+import { ArrowLeft, Check, Shield, Users, X } from 'lucide-react';
 import { StatusBadge } from '../components/Brand';
 import { showToast } from '../components/Toast';
 import { usePlatform } from '../store/alphaStore';
@@ -7,6 +7,7 @@ import { formatAR, formatDateTime } from '../utils/format';
 
 export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
   const {
+    allUsers,
     deposits,
     withdrawals,
     approveDeposit,
@@ -19,8 +20,8 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
   const pendingDeposits = deposits.filter((d) => d.status === 'pending');
   const pendingWithdrawals = withdrawals.filter((w) => w.status === 'pending');
 
-  const exitAdmin = () => {
-    logout();
+  const exitAdmin = async () => {
+    await logout();
     navigate('/auth?mode=adminLogin');
   };
 
@@ -37,15 +38,21 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
             className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Vue Membre</span>
+            <span>Déconnexion</span>
           </button>
         </div>
       </header>
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-3 gap-3">
           <div className="card p-4">
-            <p className="text-xs text-gray-500">Dépôts Airtel Money en attente</p>
+            <p className="text-xs text-gray-500">Utilisateurs</p>
+            <p className="text-2xl font-extrabold text-med-forest tabular-nums mt-1">
+              {allUsers.length}
+            </p>
+          </div>
+          <div className="card p-4">
+            <p className="text-xs text-gray-500">Dépôts en attente</p>
             <p className="text-2xl font-extrabold text-med-deep tabular-nums mt-1">
               {pendingDeposits.length}
             </p>
@@ -90,8 +97,8 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
                   {d.status === 'pending' && (
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => {
-                          approveDeposit(d.id);
+                        onClick={async () => {
+                          await approveDeposit(d.id);
                           showToast('Dépôt approuvé et crédité !', 'success');
                         }}
                         className="px-3 py-1.5 rounded-lg bg-med-deep text-white text-xs font-bold flex items-center gap-1 hover:bg-med-forest cursor-pointer"
@@ -99,8 +106,8 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
                         <Check className="w-3.5 h-3.5" /> Valider
                       </button>
                       <button
-                        onClick={() => {
-                          rejectDeposit(d.id);
+                        onClick={async () => {
+                          await rejectDeposit(d.id);
                           showToast('Dépôt refusé', 'info');
                         }}
                         className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold flex items-center gap-1 hover:bg-red-700 cursor-pointer"
@@ -150,8 +157,8 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
                   {w.status === 'pending' && (
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => {
-                          approveWithdrawal(w.id);
+                        onClick={async () => {
+                          await approveWithdrawal(w.id);
                           showToast('Retrait approuvé !', 'success');
                         }}
                         className="px-3 py-1.5 rounded-lg bg-med-deep text-white text-xs font-bold flex items-center gap-1 hover:bg-med-forest cursor-pointer"
@@ -159,8 +166,8 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
                         <Check className="w-3.5 h-3.5" /> Approuver
                       </button>
                       <button
-                        onClick={() => {
-                          rejectWithdrawal(w.id);
+                        onClick={async () => {
+                          await rejectWithdrawal(w.id);
                           showToast('Retrait refusé (solde libéré)', 'info');
                         }}
                         className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold flex items-center gap-1 hover:bg-red-700 cursor-pointer"
@@ -169,6 +176,40 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
                       </button>
                     </div>
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Users List */}
+        <section>
+          <h2 className="font-bold text-gray-900 mb-3 flex items-center gap-2">
+            <Users className="w-4 h-4 text-med-deep" />
+            <span>Utilisateurs inscrits ({allUsers.length})</span>
+          </h2>
+          {allUsers.length === 0 ? (
+            <div className="card p-6 text-center text-sm text-gray-400">
+              Aucun utilisateur enregistré
+            </div>
+          ) : (
+            <div className="card divide-y divide-gray-50">
+              {allUsers.map((u) => (
+                <div key={u.user_id} className="p-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-bold text-gray-900">{u.full_name}</p>
+                    <p className="text-xs text-gray-500">
+                      {u.phone} • Code : <span className="font-mono">{u.referral_code}</span>
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-extrabold text-med-deep tabular-nums">
+                      {formatAR(u.balance)}
+                    </p>
+                    <p className="text-[11px] text-gray-400">
+                      Gains : +{formatAR(u.total_earned)}
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>

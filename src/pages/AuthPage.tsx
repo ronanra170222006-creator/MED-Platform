@@ -19,6 +19,7 @@ export function AuthPage({
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
     full_name: '',
     phone: '',
@@ -30,17 +31,20 @@ export function AuthPage({
 
   useEffect(() => {
     setMode(initialMode);
+    setErrorMessage(null);
   }, [initialMode]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setErrorMessage(null);
 
     try {
       if (mode === 'signup') {
         if (form.password !== form.confirmPassword) {
-          showToast('Les mots de passe ne correspondent pas', 'error');
-          setLoading(false);
+          const msg = 'Les mots de passe ne correspondent pas';
+          setErrorMessage(msg);
+          showToast(msg, 'error');
           return;
         }
         const res = await signup({
@@ -50,8 +54,9 @@ export function AuthPage({
           referral_code: form.referral_code,
         });
         if (!res.ok) {
-          showToast(res.error || 'Erreur lors de la création du compte', 'error');
-          setLoading(false);
+          const msg = res.error || 'Erreur lors de la création du compte';
+          setErrorMessage(msg);
+          showToast(msg, 'error');
           return;
         }
         showToast('Compte créé avec succès !', 'success');
@@ -59,8 +64,9 @@ export function AuthPage({
       } else if (mode === 'login') {
         const res = await loginWithPhone(form.phone, form.password);
         if (!res.ok) {
-          showToast(res.error || 'Identifiants incorrects', 'error');
-          setLoading(false);
+          const msg = res.error || 'Identifiants incorrects';
+          setErrorMessage(msg);
+          showToast(msg, 'error');
           return;
         }
         showToast('Connexion réussie !', 'success');
@@ -68,8 +74,9 @@ export function AuthPage({
       } else {
         const res = await loginAdmin(form.email, form.password);
         if (!res.ok) {
-          showToast(res.error || 'Identifiants administrateur invalides', 'error');
-          setLoading(false);
+          const msg = res.error || 'Identifiants administrateur invalides';
+          setErrorMessage(msg);
+          showToast(msg, 'error');
           return;
         }
         showToast('Connexion administrateur réussie !', 'success');
@@ -139,6 +146,12 @@ export function AuthPage({
                 >
                   Inscription
                 </button>
+              </div>
+            )}
+
+            {errorMessage && (
+              <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-red-700">
+                {errorMessage}
               </div>
             )}
 
