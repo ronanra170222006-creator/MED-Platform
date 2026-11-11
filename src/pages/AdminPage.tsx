@@ -1,5 +1,14 @@
-import React, { useEffect } from 'react';
-import { ArrowLeft, Check, RefreshCw, Shield, Users, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import {
+  ArrowLeft,
+  Check,
+  Megaphone,
+  RefreshCw,
+  Send,
+  Shield,
+  Users,
+  X,
+} from 'lucide-react';
 import { StatusBadge } from '../components/Brand';
 import { showToast } from '../components/Toast';
 import { usePlatform } from '../store/alphaStore';
@@ -10,13 +19,18 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
     allUsers,
     deposits,
     withdrawals,
+    announcements,
     approveDeposit,
     rejectDeposit,
     approveWithdrawal,
     rejectWithdrawal,
+    publishGlobalAnnouncement,
     reloadFromStorage,
     logout,
   } = usePlatform();
+
+  const [noticeTitle, setNoticeTitle] = useState('');
+  const [noticeMessage, setNoticeMessage] = useState('');
 
   useEffect(() => {
     reloadFromStorage();
@@ -32,7 +46,19 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
 
   const exitAdmin = async () => {
     await logout();
-    navigate('/auth?mode=adminLogin');
+    navigate('/admin');
+  };
+
+  const handlePublishNotice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const res = await publishGlobalAnnouncement(noticeTitle, noticeMessage);
+    if (!res.ok) {
+      showToast(res.error || 'Erreur lors de la publication', 'error');
+      return;
+    }
+    setNoticeTitle('');
+    setNoticeMessage('');
+    showToast('Avis global diffusé à tous les membres !', 'success');
   };
 
   return (
@@ -195,6 +221,65 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
                       </button>
                     </div>
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Global Notice Broadcast */}
+        <section>
+          <h2 className="font-bold text-gray-900 mb-3 flex items-center gap-2">
+            <Megaphone className="w-4 h-4 text-med-deep" />
+            <span>Diffuser un avis global</span>
+          </h2>
+          <form onSubmit={handlePublishNotice} className="card p-5 space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">
+                Titre de l’annonce
+              </label>
+              <input
+                type="text"
+                required
+                value={noticeTitle}
+                onChange={(e) => setNoticeTitle(e.target.value)}
+                className="input-field text-sm"
+                placeholder="Ex : Maintenance planifiée ou Promotion VIP"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">
+                Message officiel
+              </label>
+              <textarea
+                required
+                rows={3}
+                value={noticeMessage}
+                onChange={(e) => setNoticeMessage(e.target.value)}
+                className="input-field text-sm resize-none"
+                placeholder="Rédigez le message visible par tous les membres..."
+              />
+            </div>
+            <button
+              type="submit"
+              className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
+            >
+              <Send className="w-4 h-4" />
+              <span>Diffuser l’avis</span>
+            </button>
+          </form>
+
+          {announcements.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {announcements.slice(0, 3).map((a) => (
+                <div key={a.id} className="card p-3.5 border-l-4 border-l-med-emerald">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-bold text-gray-900">{a.title}</p>
+                    <span className="text-[10px] text-gray-400">
+                      {formatDateTime(a.created_at)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-600 mt-1">{a.message}</p>
                 </div>
               ))}
             </div>

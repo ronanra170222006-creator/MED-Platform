@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Eye, EyeOff, Lock, Phone, Shield, User, Users } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Lock, Phone, User, Users } from 'lucide-react';
 import { BrandLogo } from '../components/Brand';
 import { showToast } from '../components/Toast';
 import { usePlatform } from '../store/alphaStore';
@@ -286,21 +286,6 @@ export function AuthPage({
                       : 'CONNEXION ADMIN'}
               </button>
             </form>
-
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <button
-                type="button"
-                onClick={() => setMode(mode === 'adminLogin' ? 'login' : 'adminLogin')}
-                className="w-full text-center text-xs text-gray-400 hover:text-gray-600 flex items-center justify-center gap-1.5 py-1 cursor-pointer"
-              >
-                <Shield className="w-3.5 h-3.5" />
-                <span>
-                  {mode === 'adminLogin'
-                    ? 'Revenir à la connexion membre'
-                    : 'Accès Espace Administrateur'}
-                </span>
-              </button>
-            </div>
           </div>
         </div>
       </div>

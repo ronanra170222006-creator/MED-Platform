@@ -11,6 +11,7 @@ import {
   HelpCircle,
   History,
   LogOut,
+  Megaphone,
   Play,
   Star,
   Users,
@@ -23,6 +24,7 @@ import { VIP_PLANS } from '../data/seed';
 import { usePlatform } from '../store/alphaStore';
 import { Investment } from '../types';
 import { formatAR, formatCountdown, formatDateTime } from '../utils/format';
+import { requestBrowserNotificationPermission } from '../utils/notifications';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VIDEO_DURATION_SEC = 10;
@@ -33,6 +35,7 @@ export function HomePage({ navigate }: { navigate: (path: string) => void }) {
     investments,
     tasks,
     notifications,
+    announcements,
     logout,
     markAllNotificationsRead,
   } = usePlatform();
@@ -40,8 +43,19 @@ export function HomePage({ navigate }: { navigate: (path: string) => void }) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const userNotifs = notifications.filter((n) => n.user_id === profile?.user_id);
-  const unreadCount = userNotifs.filter((n) => !n.is_read).length;
+  useEffect(() => {
+    if (profile?.user_id) {
+      requestBrowserNotificationPermission();
+    }
+  }, [profile?.user_id]);
+
+  const uid = profile?.user_id ?? '';
+  const userNotifs = notifications.filter(
+    (n) => n.user_id === uid || n.user_id === 'ALL'
+  );
+  const isNotifRead = (n: (typeof userNotifs)[number]) =>
+    n.user_id === 'ALL' ? (n.read_by ?? []).includes(uid) : n.is_read;
+  const unreadCount = userNotifs.filter((n) => !isNotifRead(n)).length;
   const availableBalance = (profile?.balance ?? 0) - (profile?.reserved_balance ?? 0);
   const activeInvestments = investments.filter(
     (i) => i.user_id === profile?.user_id && i.status === 'active'
@@ -145,7 +159,7 @@ export function HomePage({ navigate }: { navigate: (path: string) => void }) {
                 userNotifs.map((n) => (
                   <div
                     key={n.id}
-                    className={`p-4 ${n.is_read ? 'bg-white' : 'bg-med-soft'}`}
+                    className={`p-4 ${isNotifRead(n) ? 'bg-white' : 'bg-med-soft'}`}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <p className="text-sm font-bold text-gray-900">{n.title}</p>
@@ -189,6 +203,28 @@ export function HomePage({ navigate }: { navigate: (path: string) => void }) {
             </div>
           </div>
         </div>
+
+        {/* Official Global Announcement */}
+        {announcements.length > 0 && (
+          <div className="mt-4 rounded-2xl bg-med-soft border border-med-light p-4 flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-med-deep flex items-center justify-center flex-shrink-0">
+              <Megaphone className="w-4 h-4 text-white" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-extrabold text-med-forest uppercase tracking-wide">
+                  Avis officiel • {announcements[0].title}
+                </p>
+                <span className="text-[10px] text-med-forest/65 whitespace-nowrap">
+                  {formatDateTime(announcements[0].created_at)}
+                </span>
+              </div>
+              <p className="text-xs text-med-forest/90 mt-1 leading-relaxed">
+                {announcements[0].message}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* 4 Quick Actions */}
         <div className="grid grid-cols-4 gap-3 mt-5">

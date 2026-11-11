@@ -120,6 +120,14 @@ export interface NotificationItem {
   title: string;
   message: string;
   is_read: boolean;
+  read_by?: string[];
+  created_at: string;
+}
+
+export interface GlobalAnnouncement {
+  id: string;
+  title: string;
+  message: string;
   created_at: string;
 }
 

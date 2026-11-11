@@ -55,6 +55,13 @@ function AppRouter() {
     );
   }
 
+  if (path.startsWith('/admin')) {
+    if (isAuthenticated && isAdminMode) {
+      return <AdminPage navigate={navigate} />;
+    }
+    return <AuthPage navigate={navigate} initialMode="adminLogin" />;
+  }
+
   if (!isAuthenticated) {
     if (path === '/auth') {
       const modeParam = params.get('mode');
@@ -76,7 +83,7 @@ function AppRouter() {
     return <LandingPage navigate={navigate} />;
   }
 
-  if (isAdminMode || path.startsWith('/admin')) {
+  if (isAdminMode) {
     return <AdminPage navigate={navigate} />;
   }
 

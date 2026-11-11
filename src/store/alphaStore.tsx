@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import {
   DailyTask,
   DepositRequest,
+  GlobalAnnouncement,
   Investment,
   NotificationItem,
   ReferralMember,
@@ -12,6 +13,10 @@ import {
 } from '../types';
 import { VIP_PLANS } from '../data/seed';
 import { formatAR } from '../utils/format';
+import {
+  sendNativeNotification,
+  sendTransactionEmailSilently,
+} from '../utils/notifications';
 
 interface StoredAccount {
   profile: UserProfile & { solde_ariary?: number };
@@ -31,6 +36,7 @@ interface PlatformState {
   withdrawals: WithdrawalRequest[];
   transactions: TransactionRecord[];
   notifications: NotificationItem[];
+  announcements: GlobalAnnouncement[];
   referrals: ReferralMember[];
 }
 
@@ -72,6 +78,7 @@ interface PlatformContextValue extends PlatformState {
   rejectDeposit: (id: string) => Promise<void>;
   approveWithdrawal: (id: string) => Promise<void>;
   rejectWithdrawal: (id: string) => Promise<void>;
+  publishGlobalAnnouncement: (title: string, message: string) => Promise<ActionResult>;
 }
 
 export const STORAGE_KEY = 'med_local_data_v1';
@@ -91,6 +98,7 @@ const initialCleanState: PlatformState = {
   withdrawals: [],
   transactions: [],
   notifications: [],
+  announcements: [],
   referrals: [],
 };
 
@@ -201,6 +209,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         tasks: next.tasks,
         transactions: next.transactions,
         notifications: next.notifications,
+        announcements: next.announcements,
         referrals: next.referrals,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(toPersist));
@@ -221,6 +230,35 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       isAdminMode: prev.isAdminMode || fresh.isAdminMode,
       profile: prev.isAdminMode ? prev.profile : fresh.profile,
     }));
+  }, []);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== STORAGE_KEY) return;
+      const fresh = readLocalState();
+      setState((prev) => {
+        if (
+          fresh.announcements.length > prev.announcements.length &&
+          fresh.announcements[0]
+        ) {
+          sendNativeNotification(
+            fresh.announcements[0].title,
+            fresh.announcements[0].message
+          );
+        }
+        return {
+          ...fresh,
+          isAuthenticated: prev.isAuthenticated,
+          isAdminMode: prev.isAdminMode,
+          profile: prev.isAdminMode
+            ? prev.profile
+            : fresh.accounts.find((a) => a.profile.user_id === prev.profile?.user_id)
+                ?.profile ?? prev.profile,
+        };
+      });
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, []);
 
   const syncAccountProfile = useCallback(
@@ -423,6 +461,15 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       };
     });
 
+    sendTransactionEmailSilently({
+      telephone: payload.payer_number,
+      type: 'DEPOT',
+      operateur: 'Airtel Money',
+      montant: payload.amount,
+      reference: payload.transaction_ref,
+      userName: state.profile.full_name,
+    });
+
     return { ok: true };
   };
 
@@ -492,6 +539,14 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
         notifications: [notif, ...prev.notifications],
       };
+    });
+
+    sendTransactionEmailSilently({
+      telephone: payload.beneficiary_number,
+      type: 'RETRAIT',
+      operateur: payload.payment_method,
+      montant: payload.amount,
+      userName: payload.beneficiary_name,
     });
 
     return { ok: true };
@@ -619,10 +674,24 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
   };
 
   const markAllNotificationsRead = async () => {
-    setState((prev) => ({
-      ...prev,
-      notifications: prev.notifications.map((n) => ({ ...n, is_read: true })),
-    }));
+    setState((prev) => {
+      const uid = prev.profile?.user_id;
+      return {
+        ...prev,
+        notifications: prev.notifications.map((n) => {
+          if (n.user_id === uid) {
+            return { ...n, is_read: true };
+          }
+          if (n.user_id === 'ALL' && uid) {
+            const readBy = n.read_by ?? [];
+            return readBy.includes(uid)
+              ? n
+              : { ...n, read_by: [...readBy, uid] };
+          }
+          return n;
+        }),
+      };
+    });
   };
 
   const approveDeposit = async (id: string) => {
@@ -639,6 +708,10 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       }));
       const nextTransactions = prev.transactions.map((t) =>
         t.id === id ? { ...t, statut: 'REUSSI' as const } : t
+      );
+      sendNativeNotification(
+        'Dépôt validé',
+        `Le dépôt de ${formatAR(amount)} a été crédité sur le solde.`
       );
       return {
         ...prev,
@@ -692,6 +765,10 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       const nextTransactions = prev.transactions.map((t) =>
         t.id === id ? { ...t, statut: 'REUSSI' as const } : t
       );
+      sendNativeNotification(
+        'Retrait approuvé',
+        `Le retrait de ${formatAR(netAmount)} net via ${target.operateur} a été validé.`
+      );
       return {
         ...prev,
         ...synced,
@@ -735,6 +812,45 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  const publishGlobalAnnouncement = async (
+    title: string,
+    message: string
+  ): Promise<ActionResult> => {
+    const cleanTitle = title.trim();
+    const cleanMessage = message.trim();
+    if (!cleanTitle || !cleanMessage) {
+      return { ok: false, error: 'Veuillez renseigner un titre et un message.' };
+    }
+
+    const now = new Date().toISOString();
+    const announcement: GlobalAnnouncement = {
+      id: 'avis-' + Date.now(),
+      title: cleanTitle,
+      message: cleanMessage,
+      created_at: now,
+    };
+
+    const globalNotif: NotificationItem = {
+      id: 'notif-avis-' + Date.now(),
+      user_id: 'ALL',
+      title: cleanTitle,
+      message: cleanMessage,
+      is_read: false,
+      read_by: [],
+      created_at: now,
+    };
+
+    setState((prev) => ({
+      ...prev,
+      announcements: [announcement, ...prev.announcements],
+      notifications: [globalNotif, ...prev.notifications],
+    }));
+
+    sendNativeNotification(cleanTitle, cleanMessage);
+
+    return { ok: true };
+  };
+
   return (
     <PlatformContext.Provider
       value={{
@@ -753,6 +869,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         rejectDeposit,
         approveWithdrawal,
         rejectWithdrawal,
+        publishGlobalAnnouncement,
       }}
     >
       {children}
