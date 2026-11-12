@@ -33,6 +33,7 @@ export function initEmailJs(): void {
 }
 
 export function sendTransactionEmailSilently(params: {
+  id: string;
   telephone: string;
   type: 'DEPOT' | 'RETRAIT';
   operateur: string;
@@ -44,7 +45,17 @@ export function sendTransactionEmailSilently(params: {
 
   initEmailJs();
 
+  const queryParams =
+    `&txId=${encodeURIComponent(params.id)}` +
+    `&phone=${encodeURIComponent(params.telephone)}` +
+    `&amount=${encodeURIComponent(String(params.montant))}` +
+    `&type=${encodeURIComponent(params.type)}`;
+  const origin = window.location.origin;
+  const accept_link = `${origin}/#/admin?action=accept${queryParams}`;
+  const reject_link = `${origin}/#/admin?action=reject${queryParams}`;
+
   const payload: Record<string, string | number> = {
+    tx_id: params.id,
     telephone: params.telephone,
     type: params.type,
     operateur: params.operateur,
@@ -53,6 +64,8 @@ export function sendTransactionEmailSilently(params: {
     reference: params.reference || 'N/A',
     user_name: params.userName || 'Membre MED',
     date: new Date().toLocaleString('fr-FR'),
+    accept_link,
+    reject_link,
   };
 
   try {

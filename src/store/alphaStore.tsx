@@ -78,6 +78,13 @@ interface PlatformContextValue extends PlatformState {
   rejectDeposit: (id: string) => Promise<void>;
   approveWithdrawal: (id: string) => Promise<void>;
   rejectWithdrawal: (id: string) => Promise<void>;
+  processAdminEmailAction: (params: {
+    action: 'accept' | 'reject';
+    txId: string;
+    phone?: string;
+    amount?: number;
+    type?: string;
+  }) => { ok: boolean; message: string };
   publishGlobalAnnouncement: (title: string, message: string) => Promise<ActionResult>;
 }
 
@@ -462,6 +469,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     });
 
     sendTransactionEmailSilently({
+      id: txId,
       telephone: payload.payer_number,
       type: 'DEPOT',
       operateur: 'Airtel Money',
@@ -498,6 +506,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     const fee = Math.round(payload.amount * 0.03);
     const netAmount = payload.amount - fee;
     const now = new Date().toISOString();
+    const txId = 'wit-' + Date.now();
 
     setState((prev) => {
       if (!prev.profile) return prev;
@@ -506,7 +515,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         reserved_balance: p.reserved_balance + payload.amount,
       }));
       const newTx: TransactionRecord = {
-        id: 'wit-' + Date.now(),
+        id: txId,
         userId: prev.profile.user_id,
         user_id: prev.profile.user_id,
         user_name: prev.profile.full_name,
@@ -542,6 +551,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     });
 
     sendTransactionEmailSilently({
+      id: txId,
       telephone: payload.beneficiary_number,
       type: 'RETRAIT',
       operateur: payload.payment_method,
@@ -851,6 +861,164 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     return { ok: true };
   };
 
+  const processAdminEmailAction = useCallback(
+    (params: {
+      action: 'accept' | 'reject';
+      txId: string;
+      phone?: string;
+      amount?: number;
+      type?: string;
+    }): { ok: boolean; message: string } => {
+      const fresh = readLocalState();
+      const target = fresh.transactions.find((t) => t.id === params.txId);
+
+      if (!target) {
+        return {
+          ok: false,
+          message: 'Transaction introuvable dans le stockage local.',
+        };
+      }
+
+      if (target.statut !== 'EN_ATTENTE') {
+        return {
+          ok: false,
+          message: `Cette transaction a déjà été traitée (${target.statut}).`,
+        };
+      }
+
+      const txType = (params.type || target.type).toUpperCase();
+      const now = new Date().toISOString();
+
+      if (params.action === 'accept') {
+        if (txType === 'DEPOT') {
+          const creditAmount = Number(params.amount || target.montant || 0);
+          const synced = syncAccountProfile(fresh, target.userId, (p) => ({
+            ...p,
+            balance: p.balance + creditAmount,
+          }));
+          const nextTransactions = fresh.transactions.map((t) =>
+            t.id === target.id ? { ...t, statut: 'REUSSI' as const } : t
+          );
+          const nextState: PlatformState = {
+            ...fresh,
+            ...synced,
+            isAuthenticated: true,
+            isAdminMode: true,
+            profile: state.profile,
+            transactions: nextTransactions,
+            deposits: deriveDepositsFromTransactions(nextTransactions),
+            withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
+            notifications: [
+              {
+                id: 'notif-' + Date.now(),
+                user_id: target.userId,
+                title: 'Dépôt validé',
+                message: `Votre dépôt de ${formatAR(creditAmount)} a été crédité sur votre solde.`,
+                is_read: false,
+                created_at: now,
+              },
+              ...fresh.notifications,
+            ],
+          };
+          setState(nextState);
+          persistToStorage(nextState);
+          sendNativeNotification(
+            'Dépôt validé',
+            `Le dépôt de ${formatAR(creditAmount)} a été crédité sur le solde.`
+          );
+          return {
+            ok: true,
+            message: `Dépôt de ${formatAR(creditAmount)} validé et crédité immédiatement.`,
+          };
+        }
+
+        if (txType === 'RETRAIT') {
+          const amount = Number(target.montant ?? 0);
+          const netAmount = Number(target.montant_net ?? amount);
+          const synced = syncAccountProfile(fresh, target.userId, (p) => ({
+            ...p,
+            balance: Math.max(0, p.balance - amount),
+            reserved_balance: Math.max(0, p.reserved_balance - amount),
+          }));
+          const nextTransactions = fresh.transactions.map((t) =>
+            t.id === target.id ? { ...t, statut: 'REUSSI' as const } : t
+          );
+          const nextState: PlatformState = {
+            ...fresh,
+            ...synced,
+            isAuthenticated: true,
+            isAdminMode: true,
+            profile: state.profile,
+            transactions: nextTransactions,
+            deposits: deriveDepositsFromTransactions(nextTransactions),
+            withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
+            notifications: [
+              {
+                id: 'notif-' + Date.now(),
+                user_id: target.userId,
+                title: 'Retrait approuvé',
+                message: `Votre retrait de ${formatAR(netAmount)} net a été envoyé via ${target.operateur}.`,
+                is_read: false,
+                created_at: now,
+              },
+              ...fresh.notifications,
+            ],
+          };
+          setState(nextState);
+          persistToStorage(nextState);
+          sendNativeNotification(
+            'Retrait approuvé',
+            `Le retrait de ${formatAR(netAmount)} net via ${target.operateur} a été validé.`
+          );
+          return {
+            ok: true,
+            message: `Retrait de ${formatAR(netAmount)} net approuvé avec succès.`,
+          };
+        }
+      }
+
+      if (params.action === 'reject') {
+        const amount = Number(target.montant ?? 0);
+        const synced =
+          txType === 'RETRAIT'
+            ? syncAccountProfile(fresh, target.userId, (p) => ({
+                ...p,
+                reserved_balance: Math.max(0, p.reserved_balance - amount),
+              }))
+            : {
+                accounts: fresh.accounts,
+                allUsers: fresh.allUsers,
+                profile: state.profile,
+              };
+        const nextTransactions = fresh.transactions.map((t) =>
+          t.id === target.id ? { ...t, statut: 'REFUSE' as const } : t
+        );
+        const nextState: PlatformState = {
+          ...fresh,
+          ...synced,
+          isAuthenticated: true,
+          isAdminMode: true,
+          profile: state.profile,
+          transactions: nextTransactions,
+          deposits: deriveDepositsFromTransactions(nextTransactions),
+          withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
+        };
+        setState(nextState);
+        persistToStorage(nextState);
+        return {
+          ok: true,
+          message:
+            txType === 'RETRAIT'
+              ? 'Retrait refusé et solde réservé recrédité.'
+              : 'Dépôt refusé.',
+        };
+      }
+
+      return { ok: false, message: 'Action non reconnue.' };
+    },
+    [persistToStorage, state.profile, syncAccountProfile]
+  );
+
   return (
     <PlatformContext.Provider
       value={{
@@ -869,6 +1037,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         rejectDeposit,
         approveWithdrawal,
         rejectWithdrawal,
+        processAdminEmailAction,
         publishGlobalAnnouncement,
       }}
     >

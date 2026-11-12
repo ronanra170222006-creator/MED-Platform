@@ -80,7 +80,9 @@ export function AuthPage({
           return;
         }
         showToast('Connexion administrateur réussie !', 'success');
-        navigate('/admin');
+        if (!window.location.hash.startsWith('#/admin')) {
+          navigate('/admin');
+        }
       }
     } finally {
       setLoading(false);

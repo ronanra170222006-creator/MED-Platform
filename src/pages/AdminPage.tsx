@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Check,
@@ -24,6 +24,7 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
     rejectDeposit,
     approveWithdrawal,
     rejectWithdrawal,
+    processAdminEmailAction,
     publishGlobalAnnouncement,
     reloadFromStorage,
     logout,
@@ -31,10 +32,50 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
 
   const [noticeTitle, setNoticeTitle] = useState('');
   const [noticeMessage, setNoticeMessage] = useState('');
+  const [actionFeedback, setActionFeedback] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const processedHashRef = useRef<string | null>(null);
 
   useEffect(() => {
     reloadFromStorage();
-  }, [reloadFromStorage]);
+
+    const rawHash = window.location.hash;
+    const [, rawQuery = ''] = rawHash.split('?');
+    if (!rawQuery) return;
+
+    const searchParams = new URLSearchParams(rawQuery);
+    const action = searchParams.get('action');
+    const txId = searchParams.get('txId');
+
+    if ((action === 'accept' || action === 'reject') && txId) {
+      if (processedHashRef.current === rawHash) return;
+      processedHashRef.current = rawHash;
+
+      const phone = searchParams.get('phone') || undefined;
+      const amountStr = searchParams.get('amount');
+      const amount = amountStr ? Number(amountStr) : undefined;
+      const type = searchParams.get('type') || undefined;
+
+      const res = processAdminEmailAction({
+        action,
+        txId,
+        phone,
+        amount,
+        type,
+      });
+
+      setActionFeedback(res);
+      showToast(
+        res.message,
+        res.ok ? (action === 'accept' ? 'success' : 'info') : 'error'
+      );
+
+      window.history.replaceState(null, '', window.location.pathname + '#/admin');
+      navigate('/admin');
+    }
+  }, [navigate, processAdminEmailAction, reloadFromStorage]);
 
   const handleRefresh = () => {
     reloadFromStorage();
@@ -89,6 +130,25 @@ export function AdminPage({ navigate }: { navigate: (path: string) => void }) {
       </header>
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
+        {actionFeedback && (
+          <div
+            className={`rounded-2xl border p-4 flex items-center justify-between gap-3 ${
+              actionFeedback.ok
+                ? 'bg-med-soft border-med-light text-med-forest'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}
+          >
+            <p className="text-xs font-bold">{actionFeedback.message}</p>
+            <button
+              onClick={() => setActionFeedback(null)}
+              className="text-current opacity-70 hover:opacity-100 cursor-pointer"
+              aria-label="Fermer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         <div className="grid grid-cols-3 gap-3">
           <div className="card p-4">
             <p className="text-xs text-gray-500">Utilisateurs</p>
