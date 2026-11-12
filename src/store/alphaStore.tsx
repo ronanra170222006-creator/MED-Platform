@@ -872,149 +872,165 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       const fresh = readLocalState();
       const target = fresh.transactions.find((t) => t.id === params.txId);
 
-      if (!target) {
-        return {
-          ok: false,
-          message: 'Transaction introuvable dans le stockage local.',
-        };
-      }
-
-      if (target.statut !== 'EN_ATTENTE') {
+      if (target && target.statut !== 'EN_ATTENTE') {
         return {
           ok: false,
           message: `Cette transaction a déjà été traitée (${target.statut}).`,
         };
       }
 
-      const txType = (params.type || target.type).toUpperCase();
+      const txType = (params.type || target?.type || 'DEPOT').toUpperCase();
+      const rawPhone = params.phone || target?.telephone || '';
+      const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
+      const txAmount = Number(params.amount ?? target?.montant ?? 0);
       const now = new Date().toISOString();
+      const nextStatut: 'REUSSI' | 'REFUSE' =
+        params.action === 'accept' ? 'REUSSI' : 'REFUSE';
 
-      if (params.action === 'accept') {
-        if (txType === 'DEPOT') {
-          const creditAmount = Number(params.amount || target.montant || 0);
-          const synced = syncAccountProfile(fresh, target.userId, (p) => ({
-            ...p,
-            balance: p.balance + creditAmount,
-          }));
-          const nextTransactions = fresh.transactions.map((t) =>
-            t.id === target.id ? { ...t, statut: 'REUSSI' as const } : t
-          );
-          const nextState: PlatformState = {
-            ...fresh,
-            ...synced,
-            isAuthenticated: true,
-            isAdminMode: true,
-            profile: state.profile,
-            transactions: nextTransactions,
-            deposits: deriveDepositsFromTransactions(nextTransactions),
-            withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
-            notifications: [
-              {
-                id: 'notif-' + Date.now(),
-                user_id: target.userId,
-                title: 'Dépôt validé',
-                message: `Votre dépôt de ${formatAR(creditAmount)} a été crédité sur votre solde.`,
-                is_read: false,
-                created_at: now,
-              },
-              ...fresh.notifications,
-            ],
-          };
-          setState(nextState);
-          persistToStorage(nextState);
-          sendNativeNotification(
-            'Dépôt validé',
-            `Le dépôt de ${formatAR(creditAmount)} a été crédité sur le solde.`
-          );
-          return {
-            ok: true,
-            message: `Dépôt de ${formatAR(creditAmount)} validé et crédité immédiatement.`,
-          };
-        }
-
-        if (txType === 'RETRAIT') {
-          const amount = Number(target.montant ?? 0);
-          const netAmount = Number(target.montant_net ?? amount);
-          const synced = syncAccountProfile(fresh, target.userId, (p) => ({
-            ...p,
-            balance: Math.max(0, p.balance - amount),
-            reserved_balance: Math.max(0, p.reserved_balance - amount),
-          }));
-          const nextTransactions = fresh.transactions.map((t) =>
-            t.id === target.id ? { ...t, statut: 'REUSSI' as const } : t
-          );
-          const nextState: PlatformState = {
-            ...fresh,
-            ...synced,
-            isAuthenticated: true,
-            isAdminMode: true,
-            profile: state.profile,
-            transactions: nextTransactions,
-            deposits: deriveDepositsFromTransactions(nextTransactions),
-            withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
-            notifications: [
-              {
-                id: 'notif-' + Date.now(),
-                user_id: target.userId,
-                title: 'Retrait approuvé',
-                message: `Votre retrait de ${formatAR(netAmount)} net a été envoyé via ${target.operateur}.`,
-                is_read: false,
-                created_at: now,
-              },
-              ...fresh.notifications,
-            ],
-          };
-          setState(nextState);
-          persistToStorage(nextState);
-          sendNativeNotification(
-            'Retrait approuvé',
-            `Le retrait de ${formatAR(netAmount)} net via ${target.operateur} a été validé.`
-          );
-          return {
-            ok: true,
-            message: `Retrait de ${formatAR(netAmount)} net approuvé avec succès.`,
-          };
-        }
+      // Locate matching user account by userId or normalized phone
+      let matchedAccount = target
+        ? fresh.accounts.find((a) => a.profile.user_id === target.userId)
+        : undefined;
+      if (!matchedAccount && cleanPhone) {
+        matchedAccount = fresh.accounts.find(
+          (a) =>
+            a.profile.phone.replace(/[^0-9]/g, '') === cleanPhone ||
+            a.profile.phone === rawPhone
+        );
       }
 
-      if (params.action === 'reject') {
-        const amount = Number(target.montant ?? 0);
-        const synced =
-          txType === 'RETRAIT'
-            ? syncAccountProfile(fresh, target.userId, (p) => ({
+      let nextAccounts: StoredAccount[];
+      let resolvedUserId: string;
+      let resolvedUserName: string;
+
+      if (matchedAccount) {
+        resolvedUserId = matchedAccount.profile.user_id;
+        resolvedUserName = matchedAccount.profile.full_name;
+        const synced = syncAccountProfile(fresh, resolvedUserId, (p) => {
+          if (params.action === 'accept') {
+            if (txType === 'DEPOT') {
+              return { ...p, balance: p.balance + txAmount };
+            }
+            if (txType === 'RETRAIT') {
+              return {
                 ...p,
-                reserved_balance: Math.max(0, p.reserved_balance - amount),
-              }))
-            : {
-                accounts: fresh.accounts,
-                allUsers: fresh.allUsers,
-                profile: state.profile,
+                balance: Math.max(0, p.balance - txAmount),
+                reserved_balance: Math.max(0, p.reserved_balance - txAmount),
               };
-        const nextTransactions = fresh.transactions.map((t) =>
-          t.id === target.id ? { ...t, statut: 'REFUSE' as const } : t
-        );
-        const nextState: PlatformState = {
-          ...fresh,
-          ...synced,
-          isAuthenticated: true,
-          isAdminMode: true,
-          profile: state.profile,
-          transactions: nextTransactions,
-          deposits: deriveDepositsFromTransactions(nextTransactions),
-          withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
+            }
+          } else if (params.action === 'reject' && txType === 'RETRAIT') {
+            return {
+              ...p,
+              reserved_balance: Math.max(0, p.reserved_balance - txAmount),
+            };
+          }
+          return p;
+        });
+        nextAccounts = synced.accounts;
+      } else {
+        resolvedUserId = target?.userId || 'user-' + Date.now();
+        resolvedUserName = cleanPhone ? `Membre ${cleanPhone}` : 'Membre MED';
+        const initialSolde =
+          params.action === 'accept' && txType === 'DEPOT' ? txAmount : 0;
+        const newProfile: UserProfile & { solde_ariary: number } = {
+          user_id: resolvedUserId,
+          full_name: resolvedUserName,
+          phone: cleanPhone || rawPhone,
+          referral_code: 'MED' + Math.floor(100 + Math.random() * 900).toString(),
+          balance: initialSolde,
+          solde_ariary: initialSolde,
+          reserved_balance: 0,
+          total_earned: 0,
+          is_admin: false,
+          is_suspended: false,
+          created_at: now,
         };
-        setState(nextState);
-        persistToStorage(nextState);
+        nextAccounts = [...fresh.accounts, { profile: newProfile, password: '' }];
+      }
+
+      let nextTransactions: TransactionRecord[];
+      if (target) {
+        nextTransactions = fresh.transactions.map((t) =>
+          t.id === target.id ? { ...t, statut: nextStatut } : t
+        );
+      } else {
+        const fee = txType === 'RETRAIT' ? Math.round(txAmount * 0.03) : undefined;
+        const netAmount =
+          txType === 'RETRAIT' && fee !== undefined ? txAmount - fee : undefined;
+        const reconstructedTx: TransactionRecord = {
+          id: params.txId,
+          userId: resolvedUserId,
+          user_id: resolvedUserId,
+          user_name: resolvedUserName,
+          telephone: cleanPhone || rawPhone,
+          type: txType === 'RETRAIT' ? 'RETRAIT' : 'DEPOT',
+          operateur: 'Airtel Money',
+          montant: txAmount,
+          amount: txType === 'RETRAIT' ? -txAmount : txAmount,
+          frais: fee,
+          montant_net: netAmount,
+          statut: nextStatut,
+          description:
+            txType === 'RETRAIT'
+              ? `Retrait Airtel Money (${cleanPhone || rawPhone})`
+              : `Dépôt Airtel Money (${cleanPhone || rawPhone})`,
+          date: now,
+          created_at: now,
+        };
+        nextTransactions = [reconstructedTx, ...fresh.transactions];
+      }
+
+      const nextNotifications =
+        params.action === 'accept'
+          ? [
+              {
+                id: 'notif-' + Date.now(),
+                user_id: resolvedUserId,
+                title: txType === 'RETRAIT' ? 'Retrait approuvé' : 'Dépôt validé',
+                message:
+                  txType === 'RETRAIT'
+                    ? `Votre retrait de ${formatAR(txAmount)} a été validé.`
+                    : `Votre dépôt de ${formatAR(txAmount)} a été crédité sur votre solde.`,
+                is_read: false,
+                created_at: now,
+              },
+              ...fresh.notifications,
+            ]
+          : fresh.notifications;
+
+      const nextState: PlatformState = {
+        ...fresh,
+        isAuthenticated: true,
+        isAdminMode: true,
+        profile: state.profile,
+        accounts: nextAccounts,
+        allUsers: nextAccounts.map((a) => a.profile),
+        transactions: nextTransactions,
+        deposits: deriveDepositsFromTransactions(nextTransactions),
+        withdrawals: deriveWithdrawalsFromTransactions(nextTransactions),
+        notifications: nextNotifications,
+      };
+
+      setState(nextState);
+      persistToStorage(nextState);
+
+      if (params.action === 'accept') {
+        sendNativeNotification(
+          txType === 'RETRAIT' ? 'Retrait approuvé' : 'Dépôt validé',
+          `${txType === 'RETRAIT' ? 'Retrait' : 'Dépôt'} de ${formatAR(txAmount)} validé.`
+        );
         return {
           ok: true,
           message:
-            txType === 'RETRAIT'
-              ? 'Retrait refusé et solde réservé recrédité.'
-              : 'Dépôt refusé.',
+            'Transaction validée et archivée avec succès dans l’espace administrateur',
         };
       }
 
-      return { ok: false, message: 'Action non reconnue.' };
+      return {
+        ok: true,
+        message:
+          'Transaction refusée et archivée avec succès dans l’espace administrateur',
+      };
     },
     [persistToStorage, state.profile, syncAccountProfile]
   );
